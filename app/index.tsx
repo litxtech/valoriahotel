@@ -1,10 +1,20 @@
 import { useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Alert,
+  useWindowDimensions,
+  Platform,
+} from 'react-native';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuthStore } from '@/stores/authStore';
 import { log } from '@/lib/logger';
 import { startGeofenceWatch, stopGeofenceWatch, type HotelGeofenceConfig } from '@/lib/geofencing';
 import { hasPolicyConsent } from '@/lib/policyConsent';
+import { theme } from '@/constants/theme';
 
 const HOTEL_COORDS: HotelGeofenceConfig | null =
   typeof process.env.EXPO_PUBLIC_HOTEL_LAT !== 'undefined' &&
@@ -18,6 +28,8 @@ const HOTEL_COORDS: HotelGeofenceConfig | null =
 
 export default function HomeScreen() {
   const router = useRouter();
+  const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const { user, staff, loading, loadSession } = useAuthStore();
   const notifiedNearby = useRef(false);
 
@@ -26,7 +38,6 @@ export default function HomeScreen() {
     loadSession();
   }, []);
 
-  // Konum: Otele yaklaşınca "Check-in yapmak ister misiniz?" bildirimi
   useEffect(() => {
     if (!HOTEL_COORDS || staff) return;
     startGeofenceWatch(
@@ -55,8 +66,13 @@ export default function HomeScreen() {
       router.replace('/admin');
       return;
     }
+    if (user) {
+      log.info('HomeScreen', 'müşteri oturumu var, /customer yönlendiriliyor');
+      router.replace('/customer');
+      return;
+    }
     log.info('HomeScreen', 'ana ekran gösteriliyor (giriş yok)');
-  }, [loading, staff]);
+  }, [loading, staff, user]);
 
   useEffect(() => {
     if (!loading) log.info('HomeScreen', 'durum', { hasStaff: !!staff, hasUser: !!user });
@@ -74,82 +90,217 @@ export default function HomeScreen() {
     else router.push({ pathname: '/policies', params: { next: 'guest' } });
   };
 
+  const cardWidth = Math.min(width - 48, 400);
+  const paddingHorizontal = Math.max(24, (width - cardWidth) / 2);
+
   if (loading) {
     return (
-      <View style={styles.centered}>
-        <Text style={styles.title}>Valoria Hotel</Text>
-        <Text style={styles.subtitle}>Yükleniyor...</Text>
+      <View style={[styles.wrapper, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+        <View style={styles.hero}>
+          <View style={styles.logoPlaceholder} />
+          <Text style={styles.loadingTitle}>Valoria Hotel</Text>
+          <Text style={styles.loadingSub}>Yükleniyor...</Text>
+        </View>
       </View>
     );
   }
 
   return (
-    <View style={styles.centered}>
-      <Text style={styles.title}>Valoria Hotel</Text>
-      <Text style={styles.subtitle}>Konaklama Sözleşmesi</Text>
-      <TouchableOpacity style={styles.primaryButton} onPress={goToCustomer}>
-        <Text style={styles.primaryButtonText}>Müşteri Uygulaması</Text>
-      </TouchableOpacity>
-      <TouchableOpacity style={styles.secondaryButton} onPress={goToGuest}>
-        <Text style={styles.secondaryButtonText}>QR ile Sözleşme Onayı</Text>
-      </TouchableOpacity>
-      <TouchableOpacity style={[styles.secondaryButton, { marginTop: 0 }]} onPress={() => router.push('/admin/login')}>
-        <Text style={styles.secondaryButtonText}>Personel Girişi</Text>
-      </TouchableOpacity>
-      <TouchableOpacity style={[styles.secondaryButton, { marginTop: 8 }]} onPress={() => router.push('/auth')}>
-        <Text style={styles.secondaryButtonText}>E-posta ile giriş / kayıt</Text>
-      </TouchableOpacity>
+    <View style={[styles.wrapper, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+      {/* Üst: marka alanı */}
+      <View style={styles.hero}>
+        <View style={styles.logoMark}>
+          <Text style={styles.logoText}>V</Text>
+        </View>
+        <Text style={styles.title}>Valoria Hotel</Text>
+        <View style={styles.divider} />
+        <Text style={styles.tagline}>Konaklama sözleşmesi ve giriş</Text>
+      </View>
+
+      {/* Alt: aksiyon kartı */}
+      <View style={[styles.card, { width: cardWidth, marginHorizontal: paddingHorizontal }]}>
+        <TouchableOpacity
+          style={styles.primaryButton}
+          onPress={goToCustomer}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.primaryLabel}>Müşteri uygulaması</Text>
+          <Text style={styles.primaryHint}>Giriş yap veya hesap oluştur</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.secondaryButton}
+          onPress={goToGuest}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.secondaryLabel}>QR ile sözleşme onayı</Text>
+          <Text style={styles.secondaryHint}>Oda QR kodu ile hızlı giriş</Text>
+        </TouchableOpacity>
+
+        <View style={styles.dividerLine} />
+
+        <TouchableOpacity
+          style={styles.tertiaryButton}
+          onPress={() => router.push('/admin/login')}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.tertiaryLabel}>Personel girişi</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tertiaryButton, styles.tertiaryButtonLast]}
+          onPress={() => router.push('/auth')}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.tertiaryLabel}>E-posta ile giriş / kayıt</Text>
+        </TouchableOpacity>
+      </View>
+
+      {Platform.OS === 'web' && (
+        <Text style={styles.footer}>Valoria Hotel — Konuk deneyimi</Text>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  centered: {
+  wrapper: {
+    flex: 1,
+    backgroundColor: '#0f1419',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  hero: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#1a365d',
-    padding: 24,
+    minHeight: 220,
+  },
+  logoMark: {
+    width: 64,
+    height: 64,
+    borderRadius: 16,
+    backgroundColor: theme.colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  logoText: {
+    fontSize: 32,
+    fontWeight: '700',
+    color: '#0f1419',
+    letterSpacing: -1,
+  },
+  logoPlaceholder: {
+    width: 64,
+    height: 64,
+    borderRadius: 16,
+    backgroundColor: 'rgba(184, 134, 11, 0.3)',
+    marginBottom: 20,
   },
   title: {
     fontSize: 28,
     fontWeight: '700',
-    color: '#fff',
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: 'rgba(255,255,255,0.8)',
-    marginBottom: 48,
-  },
-  primaryButton: {
-    backgroundColor: '#ed8936',
-    paddingVertical: 16,
-    paddingHorizontal: 32,
-    borderRadius: 12,
-    width: '100%',
-    maxWidth: 320,
-    alignItems: 'center',
+    color: '#ffffff',
+    letterSpacing: 0.5,
     marginBottom: 12,
   },
-  primaryButtonText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '600',
+  tagline: {
+    fontSize: 15,
+    color: 'rgba(255, 255, 255, 0.65)',
+    letterSpacing: 0.2,
+  },
+  divider: {
+    width: 40,
+    height: 3,
+    backgroundColor: theme.colors.primary,
+    borderRadius: 2,
+    marginBottom: 12,
+  },
+  loadingTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#ffffff',
+    marginBottom: 8,
+  },
+  loadingSub: {
+    fontSize: 15,
+    color: 'rgba(255, 255, 255, 0.6)',
+  },
+  card: {
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    paddingVertical: 20,
+    paddingHorizontal: 20,
+    marginBottom: 24,
+    ...(Platform.OS !== 'web' && {
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 8 },
+      shadowOpacity: 0.35,
+      shadowRadius: 24,
+      elevation: 12,
+    }),
+  },
+  primaryButton: {
+    backgroundColor: theme.colors.primary,
+    borderRadius: 14,
+    paddingVertical: 18,
+    paddingHorizontal: 20,
+    marginBottom: 12,
+  },
+  primaryLabel: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#0f1419',
+  },
+  primaryHint: {
+    fontSize: 13,
+    color: 'rgba(15, 20, 25, 0.75)',
+    marginTop: 2,
   },
   secondaryButton: {
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.6)',
-    paddingVertical: 14,
-    paddingHorizontal: 32,
-    borderRadius: 12,
-    width: '100%',
-    maxWidth: 320,
-    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    marginBottom: 16,
   },
-  secondaryButtonText: {
-    color: 'rgba(255,255,255,0.9)',
+  secondaryLabel: {
     fontSize: 16,
     fontWeight: '600',
+    color: '#ffffff',
+  },
+  secondaryHint: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.6)',
+    marginTop: 2,
+  },
+  dividerLine: {
+    height: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    marginBottom: 12,
+  },
+  tertiaryButton: {
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    borderRadius: 12,
+  },
+  tertiaryButtonLast: {
+    marginBottom: 0,
+  },
+  tertiaryLabel: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: 'rgba(255, 255, 255, 0.8)',
+  },
+  footer: {
+    fontSize: 11,
+    color: 'rgba(255, 255, 255, 0.35)',
+    marginBottom: 8,
   },
 });

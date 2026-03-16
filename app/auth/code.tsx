@@ -63,7 +63,7 @@ export default function AuthCodeScreen() {
       await useAuthStore.getState().loadSession();
       const { staff } = useAuthStore.getState();
       if (staff) router.replace('/admin');
-      else router.replace('/');
+      else router.replace('/customer');
     } catch (err: unknown) {
       const msg = (err as Error)?.message ?? 'Kod geçersiz veya süresi dolmuş.';
       log.error('AuthCode', 'verifyOtp', err, msg);

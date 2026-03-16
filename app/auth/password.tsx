@@ -54,7 +54,7 @@ export default function AuthPasswordScreen() {
           await useAuthStore.getState().loadSession();
           const { staff } = useAuthStore.getState();
           if (staff) router.replace('/admin');
-          else router.replace('/');
+          else router.replace('/customer');
         }
       }
     } catch (err: unknown) {

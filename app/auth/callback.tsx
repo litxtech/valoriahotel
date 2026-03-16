@@ -53,7 +53,7 @@ export default function AuthCallbackScreen() {
         const { staff } = useAuthStore.getState();
         log.info('AuthCallback', 'Magic link girişi tamamlandı', { hasStaff: !!staff });
         if (staff) router.replace('/admin');
-        else router.replace('/');
+        else router.replace('/customer');
         setStatus('ok');
       } catch (err) {
         if (cancelled) return;

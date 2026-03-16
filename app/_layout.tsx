@@ -71,7 +71,7 @@ export default function RootLayout() {
             await supabase.auth.setSession({ access_token, refresh_token });
             await useAuthStore.getState().loadSession();
             const { staff } = useAuthStore.getState();
-            router.replace(staff ? '/admin' : '/');
+            router.replace(staff ? '/admin' : '/customer');
           } catch (e) {
             log.error('RootLayout', 'auth/callback setSession', e);
             router.replace('/auth/callback');

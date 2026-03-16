@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
-import { View, Text, ScrollView, Image, TouchableOpacity, StyleSheet } from 'react-native';
+import { useState, useCallback, useEffect } from 'react';
+import { View, Text, ScrollView, RefreshControl, TouchableOpacity, StyleSheet } from 'react-native';
 import { supabase } from '@/lib/supabase';
+import { theme } from '@/constants/theme';
 
 type Room = {
   id: string;
@@ -13,17 +14,28 @@ type Room = {
 
 export default function CustomerRooms() {
   const [rooms, setRooms] = useState<Room[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    const load = async () => {
-      const { data } = await supabase.from('rooms').select('id, room_number, floor, view_type, status, price_per_night').order('room_number');
-      setRooms(data ?? []);
-    };
-    load();
+  const load = useCallback(async () => {
+    const { data } = await supabase.from('rooms').select('id, room_number, floor, view_type, status, price_per_night').order('room_number');
+    setRooms(data ?? []);
   }, []);
 
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  }, [load]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView
+      style={styles.container}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.colors.primary} />}
+    >
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Odalar</Text>
         <Text style={styles.headerSubtitle}>Konaklama seçenekleri</Text>
@@ -47,11 +59,18 @@ export default function CustomerRooms() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f9fafb' },
-  header: { padding: 20, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#eee' },
-  headerTitle: { fontSize: 22, fontWeight: '700' },
-  headerSubtitle: { fontSize: 14, color: '#666', marginTop: 4 },
-  card: { backgroundColor: '#fff', margin: 16, marginTop: 8, padding: 16, borderRadius: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 2 },
+  container: { flex: 1, backgroundColor: theme.colors.backgroundSecondary },
+  header: { padding: 20, backgroundColor: theme.colors.surface, borderBottomWidth: 1, borderBottomColor: theme.colors.borderLight },
+  headerTitle: { fontSize: 22, fontWeight: '700', color: theme.colors.text },
+  headerSubtitle: { fontSize: 14, color: theme.colors.textSecondary, marginTop: 4 },
+  card: {
+    backgroundColor: theme.colors.surface,
+    margin: 16,
+    marginTop: 8,
+    padding: 16,
+    borderRadius: theme.radius.md,
+    ...theme.shadows.sm,
+  },
   cardRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   roomNumber: { fontSize: 18, fontWeight: '700' },
   badge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
