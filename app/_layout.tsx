@@ -26,6 +26,7 @@ import {
   savePushTokenForStaff,
 } from '@/lib/notificationsPush';
 import { OfflineBanner } from '@/components/OfflineBanner';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 if (Platform.OS !== 'web') {
   SplashScreen.preventAutoHideAsync();
@@ -33,6 +34,8 @@ if (Platform.OS !== 'web') {
 log.info('RootLayout', 'app başlatılıyor');
 
 const splashLogoSource = require('../assets/valoria-splash-logo.png');
+
+const WEB_BG = '#1a365d';
 
 export default function RootLayout() {
   const [showSplashLogo, setShowSplashLogo] = useState(true);
@@ -46,12 +49,19 @@ export default function RootLayout() {
     }
   }, []);
 
-  // Açılış logosu: çok kısa göster (web'de hemen gizle, yoksa beyaz ekran kalır)
+  // Web: body arka planı (beyaz ekran önleme) ve splash atla
   useEffect(() => {
     if (Platform.OS === 'web') {
+      if (typeof document !== 'undefined') document.body.style.backgroundColor = WEB_BG;
       setShowSplashLogo(false);
-      return;
+      return () => {
+        if (typeof document !== 'undefined') document.body.style.backgroundColor = '';
+      };
     }
+  }, []);
+  // Açılış logosu: çok kısa göster (sadece native)
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
     const t = setTimeout(() => {
       Animated.sequence([
         Animated.timing(splashOpacity, { toValue: 1, duration: 120, useNativeDriver: true }),
@@ -237,6 +247,11 @@ export default function RootLayout() {
           const roomNumber = (data as { rooms?: { room_number?: string } })?.rooms?.room_number ?? '';
           setQR(parsed.token, roomId, roomNumber);
         }
+        // Web: QR ile açılan sayfada gizlilik ekranına yönlendirme; doğrudan sözleşme formunu göster
+        if (Platform.OS === 'web') {
+          router.replace({ pathname: '/guest/sign-one', params: { t: parsed.token ?? '', l: parsed.lang ?? 'tr' } });
+          return;
+        }
         const accepted = await hasPolicyConsent();
         if (accepted) {
           router.replace({ pathname: '/guest/sign-one', params: { token: parsed.token ?? '', lang: parsed.lang ?? '' } });
@@ -321,7 +336,7 @@ export default function RootLayout() {
   }, []);
 
   return (
-    <>
+    <ErrorBoundary>
       <StatusBar style="auto" />
       <OfflineBanner />
       {showSplashLogo ? (
@@ -345,7 +360,7 @@ export default function RootLayout() {
         <Stack.Screen name="join" options={{ headerShown: true, title: 'Personel Başvurusu' }} />
         <Stack.Screen name="go-to-notifications" options={{ headerShown: false }} />
       </Stack>
-    </>
+    </ErrorBoundary>
   );
 }
 
