@@ -20,11 +20,42 @@ export interface ParsedCheckinLink {
  */
 export function parseCheckinUrl(url: string): ParsedCheckinLink | null {
   try {
+    // Web: https URL'leri bazen Linking.parse ile doğru ayrışmıyor; manuel parse
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      const u = url.indexOf('?') >= 0 ? url : url + '?';
+      const [base, search] = u.split('?');
+      const path = base.replace(/^https?:\/\/[^/]+/, '').replace(/^\/+|\/+$/g, '') || '';
+      const query: Record<string, string> = {};
+      if (search) {
+        search.split('&').forEach((part) => {
+          const [k, v] = part.split('=');
+          if (k && v != null) query[decodeURIComponent(k)] = decodeURIComponent(v.replace(/\+/g, ' '));
+        });
+      }
+      const token = query.token || query.t;
+      const lang = query.lang || query.language || query.l;
+      if (path === 'guest/sign-one') {
+        return { type: 'sign-one', token: token || undefined, lang: lang || undefined };
+      }
+      if (path === 'guest/contract') {
+        return { type: 'contract', token: token || undefined };
+      }
+      if (path.startsWith('checkin/')) {
+        const roomId = path.replace('checkin/', '').split('/')[0];
+        if (roomId) return { type: 'room', roomId };
+      }
+      if ((path === 'guest' || path === '') && token) {
+        return { type: 'token', token };
+      }
+      if (token) return { type: 'token', token };
+      return null;
+    }
+
     const parsed = Linking.parse(url);
     const path = ((parsed.path ?? '') as string).replace(/^\/+/, '') || '';
     const query = (parsed.queryParams ?? {}) as Record<string, string>;
     const token = query.token || query.t;
-    const lang = query.lang || query.language;
+    const lang = query.lang || query.language || query.l;
 
     // Tek sayfa sözleşme onayı: valoria://guest/sign-one?token=xxx veya .../guest/sign-one?token=xxx&lang=tr
     if (path === 'guest/sign-one' || path === 'guest/sign-one/') {

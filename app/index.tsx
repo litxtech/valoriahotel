@@ -155,13 +155,19 @@ export default function HomeScreen() {
   const notifiedNearby = useRef(false);
   const scrollRef = useRef<ScrollViewType>(null);
 
-  // QR ile açılan web sayfası: ?t=TOKEN&l=tr → sözleşme onay sayfasına yönlendir
+  // QR ile açılan web: URL'de /guest/sign-one ve ?t= varsa sözleşme sayfasına git (router bazen önce index açar)
   useEffect(() => {
-    if (Platform.OS !== 'web' || !params.t?.trim()) return;
-    const t = params.t.trim();
-    const l = params.l?.trim() || 'tr';
-    router.replace({ pathname: '/guest/sign-one', params: { t, l } });
-  }, [params.t, params.l, router]);
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+    const pathname = window.location.pathname || '';
+    const search = window.location.search || '';
+    if (!pathname.includes('/guest/sign-one')) return;
+    const params = new URLSearchParams(search);
+    const t = params.get('t') || params.get('token');
+    const l = params.get('l') || params.get('lang') || 'tr';
+    if (t) {
+      router.replace({ pathname: '/guest/sign-one', params: { t, l: l || 'tr' } });
+    }
+  }, [router]);
 
   useEffect(() => {
     const sub = NetInfo.addEventListener((state) => setIsOffline(!state.isConnected));
@@ -205,9 +211,14 @@ export default function HomeScreen() {
   }, [staff]);
 
   // Giriş yapmış kullanıcıyı ilgili panele yönlendir. İlk girişte gizlilik onayı yoksa önce /policies.
+  // QR ile sözleşme sayfası açıldıysa yönlendirme yapma – misafir sözleşme ekranında kalsın.
   useEffect(() => {
     if (loading) return;
     if (!user && !staff) return;
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      const pathname = window.location.pathname || '';
+      if (pathname.includes('/guest/sign-one')) return;
+    }
     const path = staff ? '/staff' : '/customer';
     const nextParam = staff ? 'staff' : 'customer';
     let cancelled = false;

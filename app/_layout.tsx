@@ -201,6 +201,7 @@ export default function RootLayout() {
   // Deep link: auth/callback (magic link) veya guest (QR/NFC)
   useEffect(() => {
     const handleUrl = async (url: string) => {
+      if (!url || typeof url !== 'string') return;
       if (url.includes('auth/callback') && url.includes('#')) {
         const hashStart = url.indexOf('#') + 1;
         const hash = url.slice(hashStart);
@@ -329,6 +330,16 @@ export default function RootLayout() {
         }
       }
     };
+
+    // Web: QR ile açıldığında getInitialURL bazen path vermiyor; tarayıcı URL'sini kesin kullan
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      const href = window.location.href;
+      const path = (window.location.pathname || '').replace(/\/$/, '');
+      if (path === '/guest/sign-one' || href.includes('/guest/sign-one')) {
+        handleUrl(href);
+      }
+    }
+
     Linking.getInitialURL().then((url) => {
       if (url) handleUrl(url);
     });
