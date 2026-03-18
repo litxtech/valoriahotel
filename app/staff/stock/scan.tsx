@@ -40,7 +40,7 @@ export default function StaffStockScanScreen() {
         Alert.alert('Ürün yok', 'Bu barkoda kayıtlı ürün yok. Önce stok girişi ile ürün ekleyin.');
         return;
       }
-      router.replace({ pathname: '/staff/stock/entry', params: { barcode } });
+      router.replace(`/staff/stock/entry?barcode=${encodeURIComponent(barcode)}`);
       return;
     }
 
@@ -59,9 +59,9 @@ export default function StaffStockScanScreen() {
       return;
     }
     if (productId) {
-      router.replace({ pathname: '/staff/stock/entry', params: { productId } });
+      router.replace(`/staff/stock/entry?productId=${productId}`);
     } else {
-      router.replace({ pathname: '/staff/stock/entry', params: { barcode } });
+      router.replace(`/staff/stock/entry?barcode=${encodeURIComponent(barcode)}`);
     }
   };
 

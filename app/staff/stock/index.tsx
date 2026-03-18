@@ -46,6 +46,7 @@ type MovementRow = {
   created_at: string;
   status: 'pending' | 'approved' | 'rejected';
   product: { name: string } | null;
+  staff: { full_name: string | null } | null;
 };
 
 export default function StaffStockListScreen() {
@@ -70,9 +71,9 @@ export default function StaffStockListScreen() {
     setLoadingRecent(true);
     const { data } = await supabase
       .from('stock_movements')
-      .select('id, movement_type, quantity, created_at, status, product:stock_products(name)')
+      .select('id, movement_type, quantity, created_at, status, product:stock_products(name), staff:staff_id(full_name)')
       .order('created_at', { ascending: false })
-      .limit(5);
+      .limit(15);
     setRecent((data ?? []) as MovementRow[]);
     setLoadingRecent(false);
   };
@@ -111,10 +112,6 @@ export default function StaffStockListScreen() {
         <TouchableOpacity style={styles.smallBtn} onPress={() => router.push('/staff/stock/exit')} activeOpacity={0.8}>
           <Ionicons name="log-out-outline" size={18} color="#fff" />
           <Text style={styles.smallBtnText}>Stok Çıkışı</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.smallBtnAlt} onPress={openRecentModal} activeOpacity={0.8}>
-          <Ionicons name="time-outline" size={18} color={theme.colors.primary} />
-          <Text style={styles.smallBtnAltText}>Son İşlemler</Text>
         </TouchableOpacity>
       </View>
 
@@ -173,6 +170,11 @@ export default function StaffStockListScreen() {
             );
           })}
         </View>
+
+        <TouchableOpacity style={styles.sonIslemlerBtn} onPress={openRecentModal} activeOpacity={0.8}>
+          <Ionicons name="time-outline" size={22} color={theme.colors.primary} />
+          <Text style={styles.sonIslemlerBtnText}>Son İşlemler</Text>
+        </TouchableOpacity>
       </ScrollView>
 
       {/* Ürün aksiyon modalı: boşluğa tıklayınca kapanır, büyük resim yok */}
@@ -232,6 +234,7 @@ export default function StaffStockListScreen() {
               <ScrollView style={styles.recentModalScroll} showsVerticalScrollIndicator={false}>
                 {recent.map((m) => {
                   const name = (m.product as { name?: string } | null)?.name ?? '—';
+                  const staffName = (m.staff as { full_name?: string } | null)?.full_name ?? '—';
                   const typeLabel = m.movement_type === 'in' ? 'Giriş' : 'Çıkış';
                   const time = new Date(m.created_at).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
                   const statusLabel = m.status === 'pending' ? 'Onay bekliyor' : (m.status === 'approved' ? 'Onaylandı' : 'Reddedildi');
@@ -239,6 +242,7 @@ export default function StaffStockListScreen() {
                     <View key={m.id} style={styles.recentRow}>
                       <Text style={styles.recentText}>{typeLabel} · {name} ({m.quantity})</Text>
                       <Text style={styles.recentMeta}>{time} · {statusLabel}</Text>
+                      <Text style={styles.recentStaff}>👤 {staffName}</Text>
                     </View>
                   );
                 })}
@@ -267,7 +271,7 @@ const styles = StyleSheet.create({
   },
   smallBtn: {
     flex: 1,
-    minWidth: '23%',
+    minWidth: '30%',
     backgroundColor: theme.colors.primary,
     paddingVertical: 10,
     borderRadius: theme.radius.md,
@@ -276,19 +280,20 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   smallBtnText: { color: '#fff', fontWeight: '700', fontSize: 11 },
-  smallBtnAlt: {
-    flex: 1,
-    minWidth: '23%',
-    backgroundColor: theme.colors.surface,
-    borderWidth: 1,
-    borderColor: theme.colors.primary,
-    paddingVertical: 10,
-    borderRadius: theme.radius.md,
+  sonIslemlerBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
+    gap: 8,
+    paddingVertical: 16,
+    marginTop: 8,
+    marginBottom: 24,
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.borderLight,
   },
-  smallBtnAltText: { color: theme.colors.primary, fontWeight: '700', fontSize: 10 },
+  sonIslemlerBtnText: { fontSize: 15, fontWeight: '700', color: theme.colors.primary },
   searchWrap: { paddingHorizontal: 16, paddingVertical: 12, backgroundColor: theme.colors.surface, borderBottomWidth: 1, borderBottomColor: theme.colors.borderLight, flexDirection: 'row', alignItems: 'center', gap: 10 },
   search: { flex: 1, backgroundColor: theme.colors.backgroundSecondary, borderRadius: theme.radius.md, paddingVertical: 10, paddingHorizontal: 12, fontSize: 15, color: theme.colors.text },
   list: { flex: 1 },
@@ -349,6 +354,7 @@ const styles = StyleSheet.create({
   recentRow: { padding: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.colors.borderLight },
   recentText: { fontSize: 14, fontWeight: '700', color: theme.colors.text },
   recentMeta: { fontSize: 12, color: theme.colors.textMuted, marginTop: 2 },
+  recentStaff: { fontSize: 12, color: theme.colors.textSecondary, marginTop: 2 },
   recentModalClose: {
     marginTop: 16,
     paddingVertical: 14,

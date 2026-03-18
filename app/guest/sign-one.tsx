@@ -21,6 +21,7 @@ import { useGuestMessagingStore } from '@/stores/guestMessagingStore';
 import { supabase, supabaseUrl, supabaseAnonKey } from '@/lib/supabase';
 import { COUNTRY_PHONE_CODES, type CountryCode } from '@/constants/countryPhoneCodes';
 import { LANGUAGES } from '@/i18n';
+import { FORM_STRINGS, DEFAULT_FORM_FIELDS, type ContractFormLang } from '@/lib/contractFormStrings';
 
 const CONTRACT_LANGS = LANGUAGES;
 
@@ -100,6 +101,7 @@ export default function GuestSignOneScreen() {
   const [saving, setSaving] = useState(false);
   const [showCountryPicker, setShowCountryPicker] = useState(false);
   const [showNationalityPicker, setShowNationalityPicker] = useState(false);
+  const [formFieldsConfig, setFormFieldsConfig] = useState<Record<string, boolean>>(DEFAULT_FORM_FIELDS);
   const translatedCache = useRef<Record<string, string>>({});
 
   const [fullName, setFullName] = useState('');
@@ -192,6 +194,23 @@ export default function GuestSignOneScreen() {
   }, [contractLang, fetchContract]);
 
   useEffect(() => {
+    const next = FORM_STRINGS[contractLang as ContractFormLang]?.roomTypes?.[1];
+    if (next) setRoomType(next);
+  }, [contractLang]);
+
+  useEffect(() => {
+    supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'contract_form_fields')
+      .maybeSingle()
+      .then(({ data }) => {
+        const v = data?.value as Record<string, boolean> | null;
+        if (v && typeof v === 'object') setFormFieldsConfig({ ...DEFAULT_FORM_FIELDS, ...v });
+      });
+  }, []);
+
+  useEffect(() => {
     if (token) {
       supabase
         .from('room_qr_codes')
@@ -208,30 +227,33 @@ export default function GuestSignOneScreen() {
     }
   }, [token, setQR]);
 
+  const formStrings = FORM_STRINGS[(contractLang as ContractFormLang) in FORM_STRINGS ? (contractLang as ContractFormLang) : 'tr'] ?? FORM_STRINGS.tr;
+  const idTypeLabels = { tc: formStrings.idTypeTC, passport: formStrings.idTypePassport, other: formStrings.idTypeOther };
+  const genderLabels = { male: formStrings.male, female: formStrings.female };
   const fullPhone = `${phoneCountry.dial} ${phoneNumber.trim()}`.trim();
   const signerSummary = [
-    fullName && `Ad Soyad: ${fullName}`,
-    idNumber && `Kimlik No: ${idNumber}`,
-    fullPhone && `Telefon: ${fullPhone}`,
-    email && `E-posta: ${email}`,
-    nationality && `Uyruk: ${nationality}`,
-    dateOfBirth && `Doğum Tarihi: ${dateOfBirth}`,
-    gender && `Cinsiyet: ${GENDERS.find((g) => g.value === gender)?.label ?? gender}`,
-    address && `Adres: ${address}`,
-    checkInDate && `Giriş: ${checkInDate}`,
-    checkOutDate && `Çıkış: ${checkOutDate}`,
-    roomType && `Oda Tipi: ${roomType}`,
-    `Yetişkin: ${adults}`,
-    `Çocuk: ${children}`,
+    formFieldsConfig.full_name && fullName && `${formStrings.fullName.replace(' *', '')}: ${fullName}`,
+    formFieldsConfig.id_number && idNumber && `${formStrings.idNumber}: ${idNumber}`,
+    formFieldsConfig.phone && fullPhone && `${formStrings.phone.replace(' *', '')}: ${fullPhone}`,
+    formFieldsConfig.email && email && `${formStrings.email}: ${email}`,
+    formFieldsConfig.nationality && nationality && `${formStrings.nationality}: ${nationality}`,
+    formFieldsConfig.date_of_birth && dateOfBirth && `${formStrings.dateOfBirth}: ${dateOfBirth}`,
+    formFieldsConfig.gender && gender && `${formStrings.gender}: ${genderLabels[gender]}`,
+    formFieldsConfig.address && address && `${formStrings.address}: ${address}`,
+    formFieldsConfig.check_in_date && checkInDate && `${formStrings.checkInDate}: ${checkInDate}`,
+    formFieldsConfig.check_out_date && checkOutDate && `${formStrings.checkOutDate}: ${checkOutDate}`,
+    formFieldsConfig.room_type && roomType && `${formStrings.roomType}: ${roomType}`,
+    formFieldsConfig.adults && `${formStrings.adults}: ${adults}`,
+    formFieldsConfig.children && `${formStrings.children}: ${children}`,
   ].filter(Boolean);
 
   const submit = async () => {
-    if (!fullName.trim()) {
-      Alert.alert(t('error'), 'Ad soyad alanı zorunludur.');
+    if (formFieldsConfig.full_name && !fullName.trim()) {
+      Alert.alert(t('error'), formStrings.errorFullName);
       return;
     }
-    if (!phoneNumber.trim()) {
-      Alert.alert(t('error'), 'Telefon numarası zorunludur.');
+    if (formFieldsConfig.phone && !phoneNumber.trim()) {
+      Alert.alert(t('error'), formStrings.errorPhone);
       return;
     }
     setSaving(true);
@@ -239,30 +261,30 @@ export default function GuestSignOneScreen() {
       const { data: template } = await supabase
         .from('contract_templates')
         .select('id')
-        .eq('lang', lang)
+        .eq('lang', contractLang as string)
         .eq('version', 2)
         .eq('is_active', true)
         .maybeSingle();
 
       const guestPayload = {
-        full_name: fullName.trim(),
-        id_number: idNumber.trim() || null,
-        id_type: idType,
-        phone: fullPhone || null,
+        full_name: formFieldsConfig.full_name ? fullName.trim() : null,
+        id_number: formFieldsConfig.id_number ? idNumber.trim() || null : null,
+        id_type: formFieldsConfig.id_type ? idType : 'tc',
+        phone: formFieldsConfig.phone ? fullPhone || null : null,
         phone_country_code: phoneCountry.dial,
-        email: email.trim() || null,
-        nationality: nationality.trim() || null,
-        contract_lang: lang,
+        email: formFieldsConfig.email ? email.trim() || null : null,
+        nationality: formFieldsConfig.nationality ? nationality.trim() || null : null,
+        contract_lang: contractLang,
         contract_template_id: template?.id ?? null,
-        date_of_birth: toISODate(dateOfBirth) || null,
-        gender: gender || null,
-        address: address.trim() || null,
+        date_of_birth: formFieldsConfig.date_of_birth ? toISODate(dateOfBirth) || null : null,
+        gender: formFieldsConfig.gender ? gender : null,
+        address: formFieldsConfig.address ? address.trim() || null : null,
         room_id: roomId || null,
-        check_in_at: parseDDMMYYYY(checkInDate) || null,
-        check_out_at: parseDDMMYYYY(checkOutDate) || null,
-        room_type: roomType || null,
-        adults: adults ?? 1,
-        children: children ?? 0,
+        check_in_at: formFieldsConfig.check_in_date ? parseDDMMYYYY(checkInDate) || null : null,
+        check_out_at: formFieldsConfig.check_out_date ? parseDDMMYYYY(checkOutDate) || null : null,
+        room_type: formFieldsConfig.room_type ? roomType : null,
+        adults: formFieldsConfig.adults ? adults ?? 1 : 0,
+        children: formFieldsConfig.children ? children ?? 0 : 0,
         status: 'pending',
       };
 
@@ -283,7 +305,7 @@ export default function GuestSignOneScreen() {
         await supabase.from('contract_acceptances').insert({
           token,
           room_id: roomId || null,
-          contract_lang: lang,
+          contract_lang: contractLang,
           contract_version: 2,
           contract_template_id: template?.id ?? null,
           source: Platform.OS === 'web' ? 'web' : 'app',
@@ -338,214 +360,271 @@ export default function GuestSignOneScreen() {
         style={styles.scroll}
         contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 32 }]}
         keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
+        showsVerticalScrollIndicator={true}
+        scrollEventThrottle={16}
+        nestedScrollEnabled={false}
       >
         <View style={styles.pageTitleWrap}>
-          <Text style={styles.pageTitle}>Konaklama sözleşmesi</Text>
-          <Text style={styles.pageSubtitle}>Bilgilerinizi doldurup sözleşmeyi okuyarak onaylayın.</Text>
+          <Text style={styles.pageTitle}>{formStrings.pageTitle}</Text>
+          <Text style={styles.pageSubtitle}>{formStrings.pageSubtitle}</Text>
+        </View>
+
+        {/* Dil seçenekleri – alt başlığın hemen altında */}
+        <View style={styles.langWrap}>
+          {CONTRACT_LANGS.map(({ code, label }) => (
+            <TouchableOpacity
+              key={code}
+              style={[styles.langChip, contractLang === code && styles.langChipActive]}
+              onPress={() => {
+                setContractLang(code);
+                fetchContract(code);
+              }}
+              disabled={loadingContract || translating}
+            >
+              <Text style={[styles.langChipText, contractLang === code && styles.langChipTextActive]}>{label}</Text>
+            </TouchableOpacity>
+          ))}
         </View>
 
         {/* 1. Kişisel bilgiler */}
+        {(formFieldsConfig.full_name || formFieldsConfig.id_type || formFieldsConfig.id_number || formFieldsConfig.phone || formFieldsConfig.email || formFieldsConfig.nationality || formFieldsConfig.date_of_birth || formFieldsConfig.gender || formFieldsConfig.address) && (
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Kişisel bilgiler</Text>
+          <Text style={styles.sectionTitle}>{formStrings.sectionPersonal}</Text>
           <View style={styles.card}>
-            <Text style={styles.label}>Ad soyad *</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Örn: Ahmet Yılmaz"
-              placeholderTextColor={COLORS.textSecondary}
-              value={fullName}
-              onChangeText={setFullName}
-              autoCapitalize="words"
-            />
-            <Text style={styles.label}>Kimlik türü</Text>
-            <View style={styles.chipRow}>
-              {ID_TYPES.map((opt) => (
-                <TouchableOpacity
-                  key={opt.value}
-                  style={[styles.chip, idType === opt.value && styles.chipActive]}
-                  onPress={() => setIdType(opt.value)}
-                >
-                  <Text style={[styles.chipText, idType === opt.value && styles.chipTextActive]}>{opt.label}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <Text style={styles.label}>Kimlik numarası</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="TC, pasaport veya sürücü belgesi no"
-              placeholderTextColor={COLORS.textSecondary}
-              value={idNumber}
-              onChangeText={setIdNumber}
-              keyboardType="default"
-            />
-            <Text style={styles.label}>Telefon (WhatsApp) *</Text>
-            <View style={styles.phoneRow}>
-              <TouchableOpacity style={styles.countryBtn} onPress={() => setShowCountryPicker(true)}>
-                <Text style={styles.countryBtnText}>{phoneCountry.dial}</Text>
-              </TouchableOpacity>
-              <TextInput
-                style={[styles.input, styles.phoneInput]}
-                placeholder="5XX XXX XX XX"
-                placeholderTextColor={COLORS.textSecondary}
-                value={phoneNumber}
-                onChangeText={setPhoneNumber}
-                keyboardType="phone-pad"
-              />
-            </View>
-            <Text style={styles.label}>E-posta</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="ornek@email.com"
-              placeholderTextColor={COLORS.textSecondary}
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
-            <Text style={styles.label}>Uyruk</Text>
-            <TouchableOpacity style={styles.input} onPress={() => setShowNationalityPicker(true)}>
-              <Text style={styles.inputValue}>{nationality || 'Seçiniz'}</Text>
-            </TouchableOpacity>
-            <View style={styles.row}>
-              <View style={styles.half}>
-                <Text style={styles.label}>Doğum tarihi</Text>
+            {formFieldsConfig.full_name && (
+              <>
+                <Text style={styles.label}>{formStrings.fullName}</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="GG.AA.YYYY"
+                  placeholder={formStrings.placeholderFullName}
                   placeholderTextColor={COLORS.textSecondary}
-                  value={dateOfBirth}
-                  onChangeText={setDateOfBirth}
-                  keyboardType="numbers-and-punctuation"
+                  value={fullName}
+                  onChangeText={setFullName}
+                  autoCapitalize="words"
                 />
-              </View>
-              <View style={styles.half}>
-                <Text style={styles.label}>Cinsiyet</Text>
+              </>
+            )}
+            {formFieldsConfig.id_type && (
+              <>
+                <Text style={styles.label}>{formStrings.idType}</Text>
                 <View style={styles.chipRow}>
-                  {GENDERS.map((opt) => (
+                  {ID_TYPES.map((opt) => (
                     <TouchableOpacity
                       key={opt.value}
-                      style={[styles.chip, gender === opt.value && styles.chipActive]}
-                      onPress={() => setGender(opt.value)}
+                      style={[styles.chip, idType === opt.value && styles.chipActive]}
+                      onPress={() => setIdType(opt.value)}
                     >
-                      <Text style={[styles.chipText, gender === opt.value && styles.chipTextActive]}>{opt.label}</Text>
+                      <Text style={[styles.chipText, idType === opt.value && styles.chipTextActive]}>{idTypeLabels[opt.value]}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
+              </>
+            )}
+            {formFieldsConfig.id_number && (
+              <>
+                <Text style={styles.label}>{formStrings.idNumber}</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder={formStrings.placeholderIdNumber}
+                  placeholderTextColor={COLORS.textSecondary}
+                  value={idNumber}
+                  onChangeText={setIdNumber}
+                  keyboardType="default"
+                />
+              </>
+            )}
+            {formFieldsConfig.phone && (
+              <>
+                <Text style={styles.label}>{formStrings.phone}</Text>
+                <View style={styles.phoneRow}>
+                  <TouchableOpacity style={styles.countryBtn} onPress={() => setShowCountryPicker(true)}>
+                    <Text style={styles.countryBtnText}>{phoneCountry.dial}</Text>
+                  </TouchableOpacity>
+                  <TextInput
+                    style={[styles.input, styles.phoneInput]}
+                    placeholder={formStrings.placeholderPhone}
+                    placeholderTextColor={COLORS.textSecondary}
+                    value={phoneNumber}
+                    onChangeText={setPhoneNumber}
+                    keyboardType="phone-pad"
+                  />
+                </View>
+              </>
+            )}
+            {formFieldsConfig.email && (
+              <>
+                <Text style={styles.label}>{formStrings.email}</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder={formStrings.placeholderEmail}
+                  placeholderTextColor={COLORS.textSecondary}
+                  value={email}
+                  onChangeText={setEmail}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                />
+              </>
+            )}
+            {formFieldsConfig.nationality && (
+              <>
+                <Text style={styles.label}>{formStrings.nationality}</Text>
+                <TouchableOpacity style={styles.input} onPress={() => setShowNationalityPicker(true)}>
+                  <Text style={styles.inputValue}>{nationality || formStrings.selectNationality}</Text>
+                </TouchableOpacity>
+              </>
+            )}
+            {(formFieldsConfig.date_of_birth || formFieldsConfig.gender) && (
+              <View style={styles.row}>
+                {formFieldsConfig.date_of_birth && (
+                  <View style={styles.half}>
+                    <Text style={styles.label}>{formStrings.dateOfBirth}</Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder={formStrings.placeholderDate}
+                      placeholderTextColor={COLORS.textSecondary}
+                      value={dateOfBirth}
+                      onChangeText={setDateOfBirth}
+                      keyboardType="numbers-and-punctuation"
+                    />
+                  </View>
+                )}
+                {formFieldsConfig.gender && (
+                  <View style={styles.half}>
+                    <Text style={styles.label}>{formStrings.gender}</Text>
+                    <View style={styles.chipRow}>
+                      {GENDERS.map((opt) => (
+                        <TouchableOpacity
+                          key={opt.value}
+                          style={[styles.chip, gender === opt.value && styles.chipActive]}
+                          onPress={() => setGender(opt.value)}
+                        >
+                          <Text style={[styles.chipText, gender === opt.value && styles.chipTextActive]}>{genderLabels[opt.value]}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </View>
+                )}
               </View>
-            </View>
-            <Text style={styles.label}>Adres</Text>
-            <TextInput
-              style={[styles.input, styles.inputMultiline]}
-              placeholder="Cadde, sokak, şehir"
-              placeholderTextColor={COLORS.textSecondary}
-              value={address}
-              onChangeText={setAddress}
-              multiline
-            />
+            )}
+            {formFieldsConfig.address && (
+              <>
+                <Text style={styles.label}>{formStrings.address}</Text>
+                <TextInput
+                  style={[styles.input, styles.inputMultiline]}
+                  placeholder={formStrings.placeholderAddress}
+                  placeholderTextColor={COLORS.textSecondary}
+                  value={address}
+                  onChangeText={setAddress}
+                  multiline
+                />
+              </>
+            )}
           </View>
         </View>
+        )}
 
         {/* 2. Konaklama bilgileri */}
+        {(formFieldsConfig.check_in_date || formFieldsConfig.check_out_date || formFieldsConfig.room_type || formFieldsConfig.adults || formFieldsConfig.children) && (
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Konaklama bilgileri</Text>
+          <Text style={styles.sectionTitle}>{formStrings.sectionAccommodation}</Text>
           <View style={styles.card}>
-            <View style={styles.row}>
-              <View style={styles.half}>
-                <Text style={styles.label}>Giriş tarihi</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="GG.AA.YYYY"
-                  placeholderTextColor={COLORS.textSecondary}
-                  value={checkInDate}
-                  onChangeText={setCheckInDate}
-                  keyboardType="numbers-and-punctuation"
-                />
+            {(formFieldsConfig.check_in_date || formFieldsConfig.check_out_date) && (
+              <View style={styles.row}>
+                {formFieldsConfig.check_in_date && (
+                  <View style={styles.half}>
+                    <Text style={styles.label}>{formStrings.checkInDate}</Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder={formStrings.placeholderDate}
+                      placeholderTextColor={COLORS.textSecondary}
+                      value={checkInDate}
+                      onChangeText={setCheckInDate}
+                      keyboardType="numbers-and-punctuation"
+                    />
+                  </View>
+                )}
+                {formFieldsConfig.check_out_date && (
+                  <View style={styles.half}>
+                    <Text style={styles.label}>{formStrings.checkOutDate}</Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder={formStrings.placeholderDate}
+                      placeholderTextColor={COLORS.textSecondary}
+                      value={checkOutDate}
+                      onChangeText={setCheckOutDate}
+                      keyboardType="numbers-and-punctuation"
+                    />
+                  </View>
+                )}
               </View>
-              <View style={styles.half}>
-                <Text style={styles.label}>Çıkış tarihi</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="GG.AA.YYYY"
-                  placeholderTextColor={COLORS.textSecondary}
-                  value={checkOutDate}
-                  onChangeText={setCheckOutDate}
-                  keyboardType="numbers-and-punctuation"
-                />
-              </View>
-            </View>
-            <Text style={styles.label}>Oda tipi</Text>
-            <View style={styles.chipRowWrap}>
-              {ROOM_TYPES.map((r) => (
-                <TouchableOpacity
-                  key={r}
-                  style={[styles.chipSmall, roomType === r && styles.chipActive]}
-                  onPress={() => setRoomType(r)}
-                >
-                  <Text style={[styles.chipText, roomType === r && styles.chipTextActive]}>{r}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <View style={styles.row}>
-              <View style={styles.half}>
-                <Text style={styles.label}>Yetişkin sayısı</Text>
-                <View style={styles.stepperRow}>
-                  <TouchableOpacity style={styles.stepperBtn} onPress={() => setAdults((a) => Math.max(0, a - 1))}>
-                    <Text style={styles.stepperText}>−</Text>
-                  </TouchableOpacity>
-                  <Text style={styles.stepperValue}>{adults}</Text>
-                  <TouchableOpacity style={styles.stepperBtn} onPress={() => setAdults((a) => a + 1)}>
-                    <Text style={styles.stepperText}>+</Text>
-                  </TouchableOpacity>
+            )}
+            {formFieldsConfig.room_type && (
+              <>
+                <Text style={styles.label}>{formStrings.roomType}</Text>
+                <View style={styles.chipRowWrap}>
+                  {(formStrings.roomTypes.length ? formStrings.roomTypes : FORM_STRINGS.tr.roomTypes).map((r) => (
+                    <TouchableOpacity
+                      key={r}
+                      style={[styles.chipSmall, roomType === r && styles.chipActive]}
+                      onPress={() => setRoomType(r)}
+                    >
+                      <Text style={[styles.chipText, roomType === r && styles.chipTextActive]}>{r}</Text>
+                    </TouchableOpacity>
+                  ))}
                 </View>
+              </>
+            )}
+            {(formFieldsConfig.adults || formFieldsConfig.children) && (
+              <View style={styles.row}>
+                {formFieldsConfig.adults && (
+                  <View style={styles.half}>
+                    <Text style={styles.label}>{formStrings.adults}</Text>
+                    <View style={styles.stepperRow}>
+                      <TouchableOpacity style={styles.stepperBtn} onPress={() => setAdults((a) => Math.max(0, a - 1))}>
+                        <Text style={styles.stepperText}>−</Text>
+                      </TouchableOpacity>
+                      <Text style={styles.stepperValue}>{adults}</Text>
+                      <TouchableOpacity style={styles.stepperBtn} onPress={() => setAdults((a) => a + 1)}>
+                        <Text style={styles.stepperText}>+</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                )}
+                {formFieldsConfig.children && (
+                  <View style={styles.half}>
+                    <Text style={styles.label}>{formStrings.children}</Text>
+                    <View style={styles.stepperRow}>
+                      <TouchableOpacity style={styles.stepperBtn} onPress={() => setChildren((c) => Math.max(0, c - 1))}>
+                        <Text style={styles.stepperText}>−</Text>
+                      </TouchableOpacity>
+                      <Text style={styles.stepperValue}>{children}</Text>
+                      <TouchableOpacity style={styles.stepperBtn} onPress={() => setChildren((c) => c + 1)}>
+                        <Text style={styles.stepperText}>+</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                )}
               </View>
-              <View style={styles.half}>
-                <Text style={styles.label}>Çocuk (12 yaş altı)</Text>
-                <View style={styles.stepperRow}>
-                  <TouchableOpacity style={styles.stepperBtn} onPress={() => setChildren((c) => Math.max(0, c - 1))}>
-                    <Text style={styles.stepperText}>−</Text>
-                  </TouchableOpacity>
-                  <Text style={styles.stepperValue}>{children}</Text>
-                  <TouchableOpacity style={styles.stepperBtn} onPress={() => setChildren((c) => c + 1)}>
-                    <Text style={styles.stepperText}>+</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </View>
+            )}
           </View>
         </View>
+        )}
 
-        {/* 3. Sözleşme metni - Kutudan çıkarıldı, sayfa üzerinde doğrudan */}
+        {/* 3. Sözleşme metni */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Sözleşme metni</Text>
-          <Text style={styles.sectionHint}>Dil seçin; sözleşme seçilen dilde tam metin olarak çevrilir.</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.langStrip} contentContainerStyle={styles.langStripContent}>
-            {CONTRACT_LANGS.map(({ code, label }) => (
-              <TouchableOpacity
-                key={code}
-                style={[styles.langChip, contractLang === code && styles.langChipActive]}
-                onPress={() => {
-                  setContractLang(code);
-                  fetchContract(code);
-                }}
-                disabled={loadingContract || translating}
-              >
-                <Text style={[styles.langChipText, contractLang === code && styles.langChipTextActive]}>{label}</Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+          <Text style={styles.sectionTitle}>{formStrings.sectionContract}</Text>
           {loadingContract || translating ? (
             <ActivityIndicator size="small" color={COLORS.accent} style={styles.loader} />
           ) : (
             <View style={styles.contractBody}>
-              <Text style={styles.contractText}>{contractContent || 'Sözleşme metni yükleniyor…'}</Text>
+              <Text style={styles.contractText}>{contractContent || formStrings.loadingContract}</Text>
             </View>
           )}
         </View>
 
-        {/* 4. İmza özeti */}
+        {/* 4. Onay özeti */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Onay özeti</Text>
+          <Text style={styles.sectionTitle}>{formStrings.sectionSummary}</Text>
           <View style={styles.signerCard}>
             {signerSummary.length > 0 ? (
               signerSummary.map((line, i) => (
@@ -554,7 +633,7 @@ export default function GuestSignOneScreen() {
                 </Text>
               ))
             ) : (
-              <Text style={styles.signerPlaceholder}>Formu doldurduğunuzda burada görünecektir.</Text>
+              <Text style={styles.signerPlaceholder}>{formStrings.signerPlaceholder}</Text>
             )}
           </View>
         </View>
@@ -568,7 +647,7 @@ export default function GuestSignOneScreen() {
           {saving ? (
             <ActivityIndicator color="#fff" size="small" />
           ) : (
-            <Text style={styles.submitBtnText}>Sözleşmeyi kabul ediyorum</Text>
+            <Text style={styles.submitBtnText}>{formStrings.acceptButton}</Text>
           )}
         </TouchableOpacity>
       </ScrollView>
@@ -627,8 +706,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
   sectionHint: { fontSize: 13, color: COLORS.textSecondary, marginBottom: 12 },
-  langStrip: { maxHeight: 44, marginBottom: 12 },
-  langStripContent: { paddingVertical: 4, gap: 8, alignItems: 'center', paddingRight: 16 },
+  langWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16, justifyContent: 'center' },
   langChip: {
     paddingHorizontal: 14,
     paddingVertical: 8,

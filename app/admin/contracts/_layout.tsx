@@ -18,6 +18,8 @@ export default function ContractsLayout() {
         headerTitleStyle: { fontWeight: '600', fontSize: 17 },
         headerLeft,
       }}
-    />
+    >
+      <Stack.Screen name="form-fields" options={{ title: 'Hangi bilgi alınacak' }} />
+    </Stack>
   );
 }

@@ -1,10 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
   TextInput,
   TouchableOpacity,
-  Image,
   ScrollView,
   StyleSheet,
   Alert,
@@ -39,12 +38,14 @@ export default function StaffStockEntryScreen() {
   const [quantity, setQuantity] = useState('');
   const [notes, setNotes] = useState('');
   const [photo, setPhoto] = useState<string | null>(null);
-  const [staffImage, setStaffImage] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [search, setSearch] = useState('');
   const [previewUri, setPreviewUri] = useState<string | null>(null);
-  /** Barkod ayrı, ürün adı ayrı: barkod okutulunca sadece barkod gösterilir; ürün adını kullanıcı yazar (arama isimle yapılır). */
+  /** Barkod ayrı, ürün adı ayrı: barkod okutulunca sadece barkod gösterilir; ürün adını kullanıcı yazar. */
   const [productNameFree, setProductNameFree] = useState('');
+  /** Barkod okutulduğunda teslim alan kişi ismi. */
+  const [receivedByName, setReceivedByName] = useState('');
+  const searchInputRef = useRef<TextInput>(null);
 
   useEffect(() => {
     if (productIdParam) {
@@ -54,9 +55,18 @@ export default function StaffStockEntryScreen() {
         .eq('id', productIdParam)
         .single()
         .then(({ data }) => setProduct(data ?? null));
-    } else if (!barcodeParam) {
-      supabase.from('stock_products').select('id, name, unit, current_stock').order('name').then(({ data }) => setProducts(data ?? []));
+      return;
     }
+    if (barcodeParam) {
+      supabase
+        .from('stock_products')
+        .select('id, name, unit, current_stock, min_stock')
+        .eq('barcode', barcodeParam)
+        .maybeSingle()
+        .then(({ data }) => setProduct(data ?? null));
+      return;
+    }
+    supabase.from('stock_products').select('id, name, unit, current_stock').order('name').then(({ data }) => setProducts(data ?? []));
   }, [productIdParam, barcodeParam]);
 
   const uploadPhotoFromUri = async (uri: string): Promise<string> => {
@@ -81,7 +91,7 @@ export default function StaffStockEntryScreen() {
     return asset.uri ?? null;
   };
 
-  const takePhoto = async (kind: 'staff' | 'product') => {
+  const takeProductPhoto = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') {
       Alert.alert('İzin', 'Fotoğraf çekmek için kamera erişimi gerekli.');
@@ -102,8 +112,7 @@ export default function StaffStockEntryScreen() {
     setUploading(true);
     try {
       const url = await uploadPhotoFromUri(uri);
-      if (kind === 'staff') setStaffImage(url);
-      else setPhoto(url);
+      setPhoto(url);
     } catch (e) {
       Alert.alert('Hata', (e as Error)?.message ?? 'Fotoğraf yüklenemedi.');
     } finally {
@@ -111,7 +120,7 @@ export default function StaffStockEntryScreen() {
     }
   };
 
-  const pickPhoto = async (kind: 'staff' | 'product') => {
+  const pickProductPhoto = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
       Alert.alert('İzin', 'Galeri erişimi gerekli.');
@@ -132,8 +141,7 @@ export default function StaffStockEntryScreen() {
     setUploading(true);
     try {
       const url = await uploadPhotoFromUri(uri);
-      if (kind === 'staff') setStaffImage(url);
-      else setPhoto(url);
+      setPhoto(url);
     } catch (e) {
       Alert.alert('Hata', (e as Error)?.message ?? 'Fotoğraf yüklenemedi.');
     } finally {
@@ -178,14 +186,18 @@ export default function StaffStockEntryScreen() {
       return;
     }
 
+    const notesParts: string[] = [];
+    if (receivedByName.trim()) notesParts.push(`Teslim alan: ${receivedByName.trim()}`);
+    if (notes.trim()) notesParts.push(notes.trim());
+    const finalNotes = notesParts.length ? notesParts.join(' · ') : null;
+
     const { error } = await supabase.from('stock_movements').insert({
       product_id: productId,
       movement_type: 'in',
       quantity: q,
       staff_id: staff.id,
-      staff_image: staffImage,
       photo_proof: photo,
-      notes: notes || null,
+      notes: finalNotes,
       status: 'pending',
     });
 
@@ -220,26 +232,10 @@ export default function StaffStockEntryScreen() {
         </View>
         <Text style={styles.label}>Ürün adı *</Text>
         <TextInput style={styles.input} placeholder="Ürün ismi yazın (örn: Coca Cola 330ml)" value={productNameFree} onChangeText={setProductNameFree} />
+        <Text style={styles.label}>Teslim alan kişi (isim)</Text>
+        <TextInput style={styles.input} placeholder="Teslim alan kişi adı" value={receivedByName} onChangeText={setReceivedByName} />
         <Text style={styles.label}>Eklenecek miktar (adet)</Text>
         <TextInput style={styles.input} placeholder="0" keyboardType="numeric" value={quantity} onChangeText={setQuantity} />
-        <Text style={styles.label}>Teslim alan çalışan fotoğrafı (isteğe bağlı)</Text>
-        {staffImage ? (
-          <View style={styles.photoWrap}>
-            <TouchableOpacity onPress={() => setPreviewUri(staffImage)} activeOpacity={0.8}>
-              <CachedImage uri={staffImage} style={styles.photo} contentFit="cover" />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.removePhoto} onPress={() => setStaffImage(null)}><Text style={styles.removePhotoText}>✕</Text></TouchableOpacity>
-          </View>
-        ) : (
-          <View style={styles.photoButtonsRow}>
-            <TouchableOpacity style={styles.photoPlaceholder} onPress={() => takePhoto('staff')} disabled={uploading}>
-              <Text style={styles.photoPlaceholderText}>📷 Çek</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.photoPlaceholder} onPress={() => pickPhoto('staff')} disabled={uploading}>
-              <Text style={styles.photoPlaceholderText}>📁 Galeri</Text>
-            </TouchableOpacity>
-          </View>
-        )}
         <Text style={styles.label}>Ürün fotoğrafı (isteğe bağlı)</Text>
         {photo ? (
           <View style={styles.photoWrap}>
@@ -249,12 +245,12 @@ export default function StaffStockEntryScreen() {
             <TouchableOpacity style={styles.removePhoto} onPress={() => setPhoto(null)}><Text style={styles.removePhotoText}>✕</Text></TouchableOpacity>
           </View>
         ) : (
-          <View style={styles.photoButtonsRow}>
-            <TouchableOpacity style={styles.photoPlaceholder} onPress={() => takePhoto('product')} disabled={uploading}>
-              <Text style={styles.photoPlaceholderText}>📷 Çek</Text>
+          <View style={styles.productPhotoRow}>
+            <TouchableOpacity style={styles.cameraMainBtn} onPress={takeProductPhoto} disabled={uploading}>
+              <Text style={styles.cameraMainBtnText}>📷 Kamera</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.photoPlaceholder} onPress={() => pickPhoto('product')} disabled={uploading}>
-              <Text style={styles.photoPlaceholderText}>📁 Galeri</Text>
+            <TouchableOpacity style={styles.galeriSmallBtn} onPress={pickProductPhoto} disabled={uploading}>
+              <Text style={styles.galeriSmallBtnText}>Galeri</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -281,17 +277,34 @@ export default function StaffStockEntryScreen() {
   if (!product) {
     return (
       <>
-      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-        <TouchableOpacity style={styles.barcodeBtn} onPress={() => router.push('/staff/stock/scan')}>
+      <ScrollView style={styles.container} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <TouchableOpacity style={styles.barcodeBtn} onPress={() => router.push('/staff/stock/scan')} activeOpacity={0.8}>
           <Text style={styles.barcodeBtnText}>📷 Barkod Okut</Text>
         </TouchableOpacity>
-        <Text style={styles.orLabel}>veya manuel giriş</Text>
+        <TouchableOpacity
+          style={styles.manuelGirisBtn}
+          onPress={() => searchInputRef.current?.focus()}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.manuelGirisBtnText}>✏️ Manuel giriş – Ürün listesinden seç</Text>
+        </TouchableOpacity>
         <Text style={styles.label}>Ürün adı ile ara</Text>
-        <TextInput style={styles.input} placeholder="Ürün ismi yazın..." value={search} onChangeText={setSearch} />
+        <TextInput
+          ref={searchInputRef}
+          style={styles.input}
+          placeholder="Ürün ismi yazın (en az 2 karakter)..."
+          value={search}
+          onChangeText={setSearch}
+        />
         {search.length >= 2 && (
-          <View style={styles.searchList}>
+          <View style={styles.searchList} pointerEvents="box-none">
             {filteredProducts.slice(0, 12).map((p) => (
-              <TouchableOpacity key={p.id} style={styles.searchItem} onPress={() => { setProduct(p); setSearch(''); }}>
+              <TouchableOpacity
+                key={p.id}
+                style={styles.searchItem}
+                onPress={() => { setProduct(p); setSearch(''); }}
+                activeOpacity={0.7}
+              >
                 <Text style={styles.searchItemName}>{p.name}</Text>
                 <Text style={styles.searchItemStock}>{p.current_stock ?? 0} {p.unit ?? 'adet'}</Text>
               </TouchableOpacity>
@@ -329,25 +342,6 @@ export default function StaffStockEntryScreen() {
         onChangeText={setQuantity}
       />
 
-      <Text style={styles.label}>Teslim alan çalışan fotoğrafı (isteğe bağlı)</Text>
-      {staffImage ? (
-        <View style={styles.photoWrap}>
-          <TouchableOpacity onPress={() => setPreviewUri(staffImage)} activeOpacity={0.8}>
-            <CachedImage uri={staffImage} style={styles.photo} contentFit="cover" />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.removePhoto} onPress={() => setStaffImage(null)}><Text style={styles.removePhotoText}>✕</Text></TouchableOpacity>
-        </View>
-      ) : (
-        <View style={styles.photoButtonsRow}>
-          <TouchableOpacity style={styles.photoPlaceholder} onPress={() => takePhoto('staff')} disabled={uploading}>
-            <Text style={styles.photoPlaceholderText}>📷 Çek</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.photoPlaceholder} onPress={() => pickPhoto('staff')} disabled={uploading}>
-            <Text style={styles.photoPlaceholderText}>📁 Galeri</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
       <Text style={styles.label}>Ürün fotoğrafı (isteğe bağlı)</Text>
       {photo ? (
         <View style={styles.photoWrap}>
@@ -357,12 +351,12 @@ export default function StaffStockEntryScreen() {
           <TouchableOpacity style={styles.removePhoto} onPress={() => setPhoto(null)}><Text style={styles.removePhotoText}>✕</Text></TouchableOpacity>
         </View>
       ) : (
-        <View style={styles.photoButtonsRow}>
-          <TouchableOpacity style={styles.photoPlaceholder} onPress={() => takePhoto('product')} disabled={uploading}>
-            <Text style={styles.photoPlaceholderText}>📷 Çek</Text>
+        <View style={styles.productPhotoRow}>
+          <TouchableOpacity style={styles.cameraMainBtn} onPress={takeProductPhoto} disabled={uploading}>
+            <Text style={styles.cameraMainBtnText}>📷 Kamera</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.photoPlaceholder} onPress={() => pickPhoto('product')} disabled={uploading}>
-            <Text style={styles.photoPlaceholderText}>📁 Galeri</Text>
+          <TouchableOpacity style={styles.galeriSmallBtn} onPress={pickProductPhoto} disabled={uploading}>
+            <Text style={styles.galeriSmallBtnText}>Galeri</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -397,6 +391,16 @@ const styles = StyleSheet.create({
   barcodeInfoHint: { fontSize: 13, color: '#6b7280', marginTop: 8 },
   backLink: { marginBottom: 12 },
   orLabel: { fontSize: 14, color: '#6b7280', textAlign: 'center', marginBottom: 16 },
+  manuelGirisBtn: {
+    backgroundColor: '#fff',
+    borderWidth: 2,
+    borderColor: '#b8860b',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    marginBottom: 16,
+  },
+  manuelGirisBtnText: { fontSize: 15, fontWeight: '700', color: '#b8860b', textAlign: 'center' },
   label: { fontSize: 14, fontWeight: '600', marginBottom: 8, color: '#374151' },
   input: { borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 10, padding: 12, fontSize: 14, backgroundColor: '#fff' },
   textArea: { minHeight: 72 },
@@ -414,9 +418,22 @@ const styles = StyleSheet.create({
   photoLarge: { width: '100%', height: 180 },
   removePhoto: { position: 'absolute', top: 4, right: 4, width: 28, height: 28, borderRadius: 14, backgroundColor: '#dc2626', justifyContent: 'center', alignItems: 'center' },
   removePhotoText: { color: '#fff', fontWeight: '700' },
-  photoButtonsRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },
-  photoPlaceholder: { flex: 1, borderWidth: 2, borderStyle: 'dashed', borderColor: '#d1d5db', borderRadius: 10, padding: 20, alignItems: 'center', backgroundColor: '#fff' },
-  photoPlaceholderText: { color: '#6b7280', fontSize: 14 },
+  productPhotoRow: { position: 'relative', marginBottom: 16, minHeight: 56 },
+  cameraMainBtn: { backgroundColor: '#b8860b', paddingVertical: 16, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  cameraMainBtnText: { color: '#fff', fontWeight: '700', fontSize: 16 },
+  galeriSmallBtn: {
+    position: 'absolute',
+    left: 12,
+    bottom: 12,
+    zIndex: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+  },
+  galeriSmallBtnText: { color: '#374151', fontSize: 14, fontWeight: '600' },
   warning: { fontSize: 13, color: '#6b7280', marginBottom: 16 },
   submit: { backgroundColor: '#b8860b', padding: 16, borderRadius: 10 },
   submitDisabled: { opacity: 0.5 },

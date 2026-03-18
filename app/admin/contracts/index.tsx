@@ -50,6 +50,9 @@ export default function ContractsList() {
       <TouchableOpacity style={[styles.rulesCta, styles.designCta]} onPress={() => router.push('/admin/contracts/design')}>
         <Text style={styles.rulesCtaText}>🎨 Sözleşme tasarımı – Görünüm ayarları</Text>
       </TouchableOpacity>
+      <TouchableOpacity style={[styles.rulesCta, styles.formFieldsCta]} onPress={() => router.push('/admin/contracts/form-fields')}>
+        <Text style={styles.rulesCtaText}>📋 Hangi bilgiyi almak istiyorsunuz?</Text>
+      </TouchableOpacity>
       <Text style={styles.sectionTitle}>Dil bazlı sözleşmeler (tıklayarak düzenleyin)</Text>
       <FlatList
         data={templates}
@@ -78,6 +81,7 @@ const styles = StyleSheet.create({
   settingsCta: { backgroundColor: '#0f766e' },
   acceptancesCta: { backgroundColor: '#0369a1' },
   designCta: { backgroundColor: '#7c3aed' },
+  formFieldsCta: { backgroundColor: '#0d9488' },
   rulesCtaText: { color: '#fff', fontSize: 16, fontWeight: '600' },
   loading: { padding: 24 },
   sectionTitle: { fontSize: 14, fontWeight: '600', color: '#64748b', marginHorizontal: 16, marginBottom: 8 },

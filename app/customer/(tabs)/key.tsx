@@ -5,7 +5,8 @@ import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/authStore';
-import { DesignableQR, type QRCodeRef } from '@/components/DesignableQR';
+import { FramedQR, type QRCodeRef, type QRFrameStyle, QR_FRAME_LABELS } from '@/components/DesignableQR';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BarcodeScannerView } from '@/components/BarcodeScannerView';
 
 export default function DigitalKeyScreen() {
@@ -20,6 +21,14 @@ export default function DigitalKeyScreen() {
   const [checkinQrRef, setCheckinQrRef] = useState<QRCodeRef>(null);
   const [contractQrRef, setContractQrRef] = useState<QRCodeRef>(null);
   const [qrDownloading, setQrDownloading] = useState<'checkin' | 'contract' | null>(null);
+  const [qrDrawerVisible, setQrDrawerVisible] = useState(false);
+  const [selectedQrType, setSelectedQrType] = useState<'checkin' | 'contract'>('checkin');
+  const [selectedFrame, setSelectedFrame] = useState<QRFrameStyle>('modern');
+  const insets = useSafeAreaInsets();
+
+  const FRAME_OPTIONS: QRFrameStyle[] = ['minimal', 'bordered', 'modern', 'elegant'];
+  const checkinDesign = { useLogo: true, backgroundColor: '#ffffff', foregroundColor: '#111827', shape: 'rounded' as const, logoSizeRatio: 0.22 };
+  const contractDesign = { useLogo: true, backgroundColor: '#ffffff', foregroundColor: '#1a365d', shape: 'dots' as const, logoSizeRatio: 0.22 };
 
   const guestName = useMemo(() => {
     const n = user?.user_metadata?.full_name ?? user?.user_metadata?.name;
@@ -199,46 +208,64 @@ export default function DigitalKeyScreen() {
       {isValid && urls.checkinUrl && (
         <View style={styles.qrSection}>
           <Text style={styles.sectionTitle}>QR Kodlar</Text>
+          <TouchableOpacity style={styles.qrDrawerBtn} onPress={() => setQrDrawerVisible(true)}>
+            <Text style={styles.qrDrawerBtnText}>{selectedQrType === 'checkin' ? 'Check-in QR' : 'Sözleşme QR'} • {QR_FRAME_LABELS[selectedFrame]}</Text>
+            <Text style={styles.qrDrawerBtnHint}>Tıklayın – QR türü ve çerçeve seçin</Text>
+          </TouchableOpacity>
           <View style={styles.qrCard}>
-            <Text style={styles.qrTitle}>Odaya giriş (Check-in)</Text>
-            <DesignableQR
-              value={urls.checkinUrl}
-              size={190}
-              design={{ useLogo: true, backgroundColor: '#ffffff', foregroundColor: '#111827', shape: 'rounded', logoSizeRatio: 0.22 }}
-              getRef={setCheckinQrRef}
-            />
+            {selectedQrType === 'checkin' ? (
+              <>
+                <Text style={styles.qrTitle}>Odaya giriş (Check-in)</Text>
+                <FramedQR value={urls.checkinUrl} size={190} design={checkinDesign} frame={selectedFrame} getRef={setCheckinQrRef} />
+              </>
+            ) : urls.contractUrl ? (
+              <>
+                <Text style={styles.qrTitle}>Otel kuralları / sözleşme onayı</Text>
+                <FramedQR value={urls.contractUrl} size={190} design={contractDesign} frame={selectedFrame} getRef={setContractQrRef} />
+                <Text style={styles.qrSub}>Bu QR uygulama indirmeden web'de açılır.</Text>
+              </>
+            ) : null}
             <TouchableOpacity
-              style={[styles.qrDownloadBtn, qrDownloading === 'checkin' && styles.qrDownloadBtnDisabled]}
-              onPress={() => startDownloadQr('checkin')}
+              style={[styles.qrDownloadBtn, qrDownloading !== null && styles.qrDownloadBtnDisabled]}
+              onPress={() => startDownloadQr(selectedQrType)}
               disabled={qrDownloading !== null}
             >
               <Text style={styles.qrDownloadBtnText}>QR İndir</Text>
             </TouchableOpacity>
           </View>
-          {urls.contractUrl && (
-            <View style={styles.qrCard}>
-              <Text style={styles.qrTitle}>Otel kuralları / sözleşme onayı</Text>
-              <DesignableQR
-                value={urls.contractUrl}
-                size={190}
-                design={{ useLogo: true, backgroundColor: '#ffffff', foregroundColor: '#1a365d', shape: 'dots', logoSizeRatio: 0.22 }}
-                getRef={setContractQrRef}
-              />
-              <Text style={styles.qrSub}>Bu QR uygulama indirmeden web’de açılır ve onay kaydeder.</Text>
-              <TouchableOpacity
-                style={[styles.qrDownloadBtn, qrDownloading === 'contract' && styles.qrDownloadBtnDisabled]}
-                onPress={() => startDownloadQr('contract')}
-                disabled={qrDownloading !== null}
-              >
-                <Text style={styles.qrDownloadBtnText}>QR İndir</Text>
-              </TouchableOpacity>
-            </View>
-          )}
           <TouchableOpacity style={styles.scanBtn} onPress={() => setShowScan(true)} activeOpacity={0.85}>
             <Text style={styles.scanBtnText}>QR Tara</Text>
           </TouchableOpacity>
         </View>
       )}
+
+      <Modal visible={qrDrawerVisible} transparent animationType="slide">
+        <TouchableOpacity style={styles.drawerOverlay} activeOpacity={1} onPress={() => setQrDrawerVisible(false)}>
+          <View style={[styles.drawer, { paddingBottom: insets.bottom + 24 }]} onStartShouldSetResponder={() => true}>
+            <Text style={styles.drawerTitle}>QR Kod Seçin</Text>
+            <Text style={styles.drawerLabel}>QR türü</Text>
+            <View style={styles.drawerRow}>
+              <TouchableOpacity style={[styles.drawerChip, selectedQrType === 'checkin' && styles.drawerChipActive]} onPress={() => setSelectedQrType('checkin')}>
+                <Text style={[styles.drawerChipText, selectedQrType === 'checkin' && styles.drawerChipTextActive]}>Check-in QR</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.drawerChip, selectedQrType === 'contract' && styles.drawerChipActive]} onPress={() => setSelectedQrType('contract')}>
+                <Text style={[styles.drawerChipText, selectedQrType === 'contract' && styles.drawerChipTextActive]}>Sözleşme QR</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.drawerLabel}>Çerçeve</Text>
+            <View style={styles.drawerRow}>
+              {FRAME_OPTIONS.map((f) => (
+                <TouchableOpacity key={f} style={[styles.drawerChipSmall, selectedFrame === f && styles.drawerChipActive]} onPress={() => setSelectedFrame(f)}>
+                  <Text style={[styles.drawerChipText, selectedFrame === f && styles.drawerChipTextActive]}>{QR_FRAME_LABELS[f]}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TouchableOpacity style={styles.drawerDoneBtn} onPress={() => setQrDrawerVisible(false)}>
+              <Text style={styles.drawerDoneText}>Tamam</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       <Text style={styles.sectionTitle}>Açabileceğiniz kapılar</Text>
       <Text style={styles.doorsList}>Oda kapınız (check-in sonrası). Ek yetkiler Admin → Kart Tanımlama ile verilir.</Text>
@@ -297,6 +324,21 @@ const styles = StyleSheet.create({
   shareBtn: { backgroundColor: '#b8860b', paddingVertical: 12, paddingHorizontal: 24, borderRadius: 12 },
   shareBtnText: { color: '#fff', fontWeight: '600' },
   qrSection: { marginBottom: 26 },
+  qrDrawerBtn: { padding: 16, backgroundColor: '#edf2f7', borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 12 },
+  qrDrawerBtnText: { fontSize: 16, fontWeight: '700', color: '#1a365d' },
+  qrDrawerBtnHint: { fontSize: 12, color: '#718096', marginTop: 4 },
+  drawerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  drawer: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24 },
+  drawerTitle: { fontSize: 18, fontWeight: '700', color: '#1a202c', marginBottom: 20 },
+  drawerLabel: { fontSize: 13, fontWeight: '600', color: '#4a5568', marginBottom: 8, marginTop: 12 },
+  drawerRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  drawerChip: { paddingVertical: 12, paddingHorizontal: 18, borderRadius: 12, backgroundColor: '#e2e8f0' },
+  drawerChipSmall: { paddingVertical: 10, paddingHorizontal: 14, borderRadius: 10, backgroundColor: '#e2e8f0' },
+  drawerChipActive: { backgroundColor: '#1a365d' },
+  drawerChipText: { fontSize: 14, color: '#2d3748', fontWeight: '600' },
+  drawerChipTextActive: { color: '#fff' },
+  drawerDoneBtn: { marginTop: 24, padding: 16, backgroundColor: '#1a365d', borderRadius: 12, alignItems: 'center' },
+  drawerDoneText: { color: '#fff', fontSize: 16, fontWeight: '700' },
   qrCard: {
     backgroundColor: '#fff',
     borderRadius: 18,

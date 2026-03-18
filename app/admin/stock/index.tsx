@@ -10,6 +10,8 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
+  Modal,
+  Pressable,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -72,6 +74,7 @@ export default function StockManagement() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [previewUri, setPreviewUri] = useState<string | null>(null);
+  const [recentDrawerOpen, setRecentDrawerOpen] = useState(false);
 
   const loadData = async () => {
     setLoadError(null);
@@ -279,34 +282,23 @@ export default function StockManagement() {
         ))}
       </ScrollView>
 
-      {/* Son hareketler (tüm personel) */}
-      {recentMovements.length > 0 && (
-        <View style={styles.recentSection}>
-          <Text style={styles.recentSectionTitle}>📋 Son hareketler</Text>
-          <View style={styles.recentCard}>
-            {recentMovements.slice(0, 8).map((m) => {
-              const name = (m.product as { name?: string })?.name ?? '—';
-              const staffName = (m.staff as { full_name?: string })?.full_name ?? '—';
-              const shortName = staffName.split(' ')[0] + (staffName.includes(' ') ? ' ' + staffName.split(' ')[1]?.charAt(0) + '.' : '');
-              const icon = m.movement_type === 'in' ? '📥' : '📤';
-              const sign = m.movement_type === 'in' ? '+' : '-';
-              return (
-                <TouchableOpacity
-                  key={m.id}
-                  style={styles.recentRow}
-                  onPress={() => router.push(`/admin/stock/product/${m.product_id}`)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.recentRowText} numberOfLines={1}>
-                    {icon} {m.movement_type === 'in' ? 'GİRİŞ' : 'ÇIKIŞ'} — {shortName} · {name} {sign}{m.quantity}  {formatShortDateTime(m.created_at)}
-                    {m.photo_proof ? ' [📷]' : ''}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
-      )}
+      {/* Son İşlemler – çekmece butonu (tıklanınca açılır) */}
+      <View style={styles.recentButtonWrap}>
+        <TouchableOpacity
+          style={styles.recentDrawerButton}
+          onPress={() => setRecentDrawerOpen(true)}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="time-outline" size={20} color={adminTheme.colors.primary} />
+          <Text style={styles.recentDrawerButtonText}>Son İşlemler</Text>
+          {recentMovements.length > 0 && (
+            <View style={styles.recentDrawerBadge}>
+              <Text style={styles.recentDrawerBadgeText}>{Math.min(recentMovements.length, 99)}</Text>
+            </View>
+          )}
+          <Ionicons name="chevron-up" size={18} color={adminTheme.colors.textMuted} />
+        </TouchableOpacity>
+      </View>
 
       {/* Liste alanı: bölüm başlığı + liste (aşağı kaydırın, alt butonlar en altta sabit) */}
         <View style={styles.listWrapper}>
@@ -467,6 +459,52 @@ export default function StockManagement() {
           <Text style={styles.footerBtnText}>Onaylar</Text>
         </TouchableOpacity>
       </View>
+      {/* Son İşlemler çekmecesi – tıklanınca açılır */}
+      <Modal visible={recentDrawerOpen} transparent animationType="slide">
+        <Pressable style={styles.drawerOverlay} onPress={() => setRecentDrawerOpen(false)}>
+          <Pressable style={styles.drawerPanel} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.drawerHandle} />
+            <View style={styles.drawerHeader}>
+              <Text style={styles.drawerTitle}>Son İşlemler</Text>
+              <TouchableOpacity onPress={() => setRecentDrawerOpen(false)} hitSlop={12} style={styles.drawerCloseBtn}>
+                <Ionicons name="close" size={24} color={adminTheme.colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            {recentMovements.length === 0 ? (
+              <View style={styles.drawerEmpty}>
+                <Ionicons name="document-text-outline" size={48} color={adminTheme.colors.textMuted} />
+                <Text style={styles.drawerEmptyText}>Henüz işlem yok</Text>
+              </View>
+            ) : (
+              <ScrollView style={styles.drawerScroll} contentContainerStyle={styles.drawerScrollContent} showsVerticalScrollIndicator={true}>
+                {recentMovements.map((m) => {
+                  const name = (m.product as { name?: string })?.name ?? '—';
+                  const staffName = (m.staff as { full_name?: string })?.full_name ?? '—';
+                  const shortName = staffName.split(' ')[0] + (staffName.includes(' ') ? ' ' + staffName.split(' ')[1]?.charAt(0) + '.' : '');
+                  const icon = m.movement_type === 'in' ? '📥' : '📤';
+                  const sign = m.movement_type === 'in' ? '+' : '-';
+                  return (
+                    <TouchableOpacity
+                      key={m.id}
+                      style={styles.recentRow}
+                      onPress={() => {
+                        setRecentDrawerOpen(false);
+                        router.push(`/admin/stock/product/${m.product_id}`);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.recentRowText} numberOfLines={2}>
+                        {icon} {m.movement_type === 'in' ? 'Giriş' : 'Çıkış'} — {shortName} · {name} {sign}{m.quantity}
+                      </Text>
+                      <Text style={styles.recentRowDate}>{formatShortDateTime(m.created_at)}{m.photo_proof ? ' · 📷' : ''}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
       <ImagePreviewModal visible={!!previewUri} uri={previewUri} onClose={() => setPreviewUri(null)} />
     </View>
   );
@@ -582,6 +620,7 @@ const styles = StyleSheet.create({
   categoriesWrap: {
     maxHeight: 52,
     marginTop: adminTheme.spacing.lg,
+    flexShrink: 0,
   },
   categoriesContent: {
     paddingHorizontal: adminTheme.spacing.lg,
@@ -590,18 +629,21 @@ const styles = StyleSheet.create({
   },
   listWrapper: {
     flex: 1,
-    minHeight: 240,
+    minHeight: 200,
+    overflow: 'hidden',
   },
   sectionHint: {
     fontSize: 11,
     color: adminTheme.colors.textMuted,
     paddingHorizontal: adminTheme.spacing.lg,
     marginBottom: 4,
+    flexShrink: 0,
   },
   sectionHeader: {
     paddingHorizontal: adminTheme.spacing.lg,
     paddingTop: adminTheme.spacing.md,
     paddingBottom: adminTheme.spacing.sm,
+    flexShrink: 0,
   },
   loadingBox: {
     flex: 1,
@@ -682,6 +724,7 @@ const styles = StyleSheet.create({
     marginBottom: adminTheme.spacing.md,
     borderWidth: 1,
     borderColor: adminTheme.colors.border,
+    overflow: 'hidden',
     ...adminTheme.shadow.sm,
   },
   cardLow: {
@@ -761,17 +804,80 @@ const styles = StyleSheet.create({
   cardActionBtnText: { fontSize: 12, fontWeight: '600', color: adminTheme.colors.accent },
   cardActionBtnDanger: { borderColor: adminTheme.colors.error },
   cardActionBtnDangerText: { fontSize: 12, fontWeight: '600', color: adminTheme.colors.error },
-  recentSection: { paddingHorizontal: adminTheme.spacing.lg, marginTop: adminTheme.spacing.md },
-  recentSectionTitle: { fontSize: 15, fontWeight: '700', color: adminTheme.colors.textSecondary, marginBottom: 8 },
-  recentCard: {
+  recentButtonWrap: {
+    paddingHorizontal: adminTheme.spacing.lg,
+    marginTop: adminTheme.spacing.md,
+    marginBottom: adminTheme.spacing.sm,
+    flexShrink: 0,
+  },
+  recentDrawerButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: adminTheme.colors.surface,
+    paddingVertical: 12,
+    paddingHorizontal: adminTheme.spacing.lg,
     borderRadius: adminTheme.radius.md,
     borderWidth: 1,
     borderColor: adminTheme.colors.border,
-    overflow: 'hidden',
+    gap: 8,
+    ...adminTheme.shadow.sm,
   },
-  recentRow: { paddingVertical: 10, paddingHorizontal: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: adminTheme.colors.border },
-  recentRowText: { fontSize: 13, color: adminTheme.colors.text },
+  recentDrawerButtonText: { fontSize: 15, fontWeight: '600', color: adminTheme.colors.text },
+  recentDrawerBadge: {
+    backgroundColor: adminTheme.colors.primary,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: adminTheme.radius.full,
+  },
+  recentDrawerBadgeText: { fontSize: 12, fontWeight: '700', color: adminTheme.colors.surface },
+  drawerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end',
+  },
+  drawerPanel: {
+    backgroundColor: adminTheme.colors.surface,
+    borderTopLeftRadius: adminTheme.radius.lg,
+    borderTopRightRadius: adminTheme.radius.lg,
+    maxHeight: '70%',
+    minHeight: 200,
+  },
+  drawerHandle: {
+    width: 40,
+    height: 4,
+    backgroundColor: adminTheme.colors.border,
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  drawerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: adminTheme.spacing.lg,
+    paddingVertical: adminTheme.spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: adminTheme.colors.border,
+  },
+  drawerTitle: { fontSize: 18, fontWeight: '700', color: adminTheme.colors.text },
+  drawerCloseBtn: { padding: 4 },
+  drawerEmpty: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 48,
+  },
+  drawerEmptyText: { fontSize: 15, color: adminTheme.colors.textMuted, marginTop: 12 },
+  drawerScroll: { maxHeight: 400 },
+  drawerScrollContent: { paddingBottom: adminTheme.spacing.xl },
+  recentRow: {
+    paddingVertical: 12,
+    paddingHorizontal: adminTheme.spacing.lg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: adminTheme.colors.border,
+  },
+  recentRowText: { fontSize: 14, color: adminTheme.colors.text, fontWeight: '500' },
+  recentRowDate: { fontSize: 12, color: adminTheme.colors.textMuted, marginTop: 4 },
   barBg: {
     height: 5,
     backgroundColor: adminTheme.colors.surfaceTertiary,
