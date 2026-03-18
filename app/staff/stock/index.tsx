@@ -16,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
 import { theme } from '@/constants/theme';
 import { CachedImage } from '@/components/CachedImage';
+import { ImagePreviewModal } from '@/components/ImagePreviewModal';
 
 function formatShortDateTime(iso: string): string {
   const d = new Date(iso);
@@ -45,6 +46,7 @@ type MovementRow = {
   quantity: number;
   created_at: string;
   status: 'pending' | 'approved' | 'rejected';
+  photo_proof: string | null;
   product: { name: string } | null;
   staff: { full_name: string | null } | null;
 };
@@ -58,6 +60,9 @@ export default function StaffStockListScreen() {
   const [loadingRecent, setLoadingRecent] = useState(false);
   const [productModalProduct, setProductModalProduct] = useState<Product | null>(null);
   const [recentModalVisible, setRecentModalVisible] = useState(false);
+  const [previewUri, setPreviewUri] = useState<string | null>(null);
+  /** Ürün listesinde önizleme: product_id -> son hareketin photo_proof URL'i (ürün resmi yoksa bunu gösteririz) */
+  const [lastPhotoByProductId, setLastPhotoByProductId] = useState<Record<string, string>>({});
 
   const load = async () => {
     const { data } = await supabase
@@ -67,11 +72,27 @@ export default function StaffStockListScreen() {
     setProducts((data ?? []) as Product[]);
   };
 
+  /** Stok sayfası ürün kartlarındaki önizleme için: her ürünün en son hareketindeki photo_proof */
+  const loadLastPhotoPerProduct = async () => {
+    const { data: movements } = await supabase
+      .from('stock_movements')
+      .select('product_id, photo_proof')
+      .not('photo_proof', 'is', null)
+      .order('created_at', { ascending: false });
+    const byProduct: Record<string, string> = {};
+    for (const m of movements ?? []) {
+      const pid = (m as { product_id: string }).product_id;
+      const url = (m as { photo_proof: string }).photo_proof;
+      if (pid && url && !(pid in byProduct)) byProduct[pid] = url;
+    }
+    setLastPhotoByProductId(byProduct);
+  };
+
   const loadRecent = async () => {
     setLoadingRecent(true);
     const { data } = await supabase
       .from('stock_movements')
-      .select('id, movement_type, quantity, created_at, status, product:stock_products(name), staff:staff_id(full_name)')
+      .select('id, movement_type, quantity, created_at, status, photo_proof, product:stock_products(name), staff:staff_id(full_name)')
       .order('created_at', { ascending: false })
       .limit(15);
     setRecent((data ?? []) as MovementRow[]);
@@ -81,11 +102,12 @@ export default function StaffStockListScreen() {
   useEffect(() => {
     load();
     loadRecent();
+    loadLastPhotoPerProduct();
   }, []);
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([load(), loadRecent()]);
+    await Promise.all([load(), loadRecent(), loadLastPhotoPerProduct()]);
     setRefreshing(false);
   };
 
@@ -112,6 +134,10 @@ export default function StaffStockListScreen() {
         <TouchableOpacity style={styles.smallBtn} onPress={() => router.push('/staff/stock/exit')} activeOpacity={0.8}>
           <Ionicons name="log-out-outline" size={18} color="#fff" />
           <Text style={styles.smallBtnText}>Stok Çıkışı</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.allStocksBtn} onPress={() => router.push('/staff/stock/all')} activeOpacity={0.8}>
+          <Ionicons name="layers-outline" size={18} color={theme.colors.primary} />
+          <Text style={styles.allStocksBtnText}>Tüm Stoklarım</Text>
         </TouchableOpacity>
       </View>
 
@@ -148,6 +174,7 @@ export default function StaffStockListScreen() {
             const isLow = min > 0 && cur <= min;
             const addedBy = p.creator?.full_name ?? '—';
             const addedAt = p.created_at ? formatShortDateTime(p.created_at) : '—';
+            const previewImageUrl = p.image_url ?? lastPhotoByProductId[p.id] ?? null;
             return (
               <TouchableOpacity
                 key={p.id}
@@ -158,11 +185,24 @@ export default function StaffStockListScreen() {
                 <Text style={styles.cardName}>{p.name}</Text>
                 <Text style={styles.cardStock}>Stok: {cur} {p.unit ?? 'adet'}{isLow ? '  ⚠️ Kritik' : ''}</Text>
                 <View style={styles.cardImageWrap}>
-                  <CachedImage
-                    uri={p.image_url || 'https://via.placeholder.com/400x200'}
-                    style={styles.cardImage}
-                    contentFit="cover"
-                  />
+                  {previewImageUrl ? (
+                    <TouchableOpacity
+                      activeOpacity={0.9}
+                      onPress={(e) => { e.stopPropagation(); setPreviewUri(previewImageUrl); }}
+                      style={styles.cardImageTouch}
+                    >
+                      <CachedImage
+                        uri={previewImageUrl}
+                        style={styles.cardImage}
+                        contentFit="cover"
+                      />
+                    </TouchableOpacity>
+                  ) : (
+                    <View style={styles.cardImagePlaceholder}>
+                      <Ionicons name="image-outline" size={40} color={theme.colors.textMuted} />
+                      <Text style={styles.cardImagePlaceholderText}>Ürün resmi yok</Text>
+                    </View>
+                  )}
                 </View>
                 <Text style={styles.cardMeta}>📦 Ekleyen: {addedBy}</Text>
                 <Text style={styles.cardMeta}>📅 {addedAt}</Text>
@@ -238,11 +278,29 @@ export default function StaffStockListScreen() {
                   const typeLabel = m.movement_type === 'in' ? 'Giriş' : 'Çıkış';
                   const time = new Date(m.created_at).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
                   const statusLabel = m.status === 'pending' ? 'Onay bekliyor' : (m.status === 'approved' ? 'Onaylandı' : 'Reddedildi');
+                  const hasPhoto = !!m.photo_proof;
                   return (
                     <View key={m.id} style={styles.recentRow}>
-                      <Text style={styles.recentText}>{typeLabel} · {name} ({m.quantity})</Text>
-                      <Text style={styles.recentMeta}>{time} · {statusLabel}</Text>
-                      <Text style={styles.recentStaff}>👤 {staffName}</Text>
+                      <View style={styles.recentRowMain}>
+                        <View style={styles.recentRowTextBlock}>
+                          <Text style={styles.recentText}>{typeLabel} · {name} ({m.quantity})</Text>
+                          <Text style={styles.recentMeta}>{time} · {statusLabel}</Text>
+                          <Text style={styles.recentStaff}>👤 {staffName}</Text>
+                        </View>
+                        {hasPhoto ? (
+                          <TouchableOpacity
+                            style={styles.recentRowThumb}
+                            onPress={() => setPreviewUri(m.photo_proof)}
+                            activeOpacity={0.8}
+                          >
+                            <CachedImage uri={m.photo_proof!} style={styles.recentRowThumbImage} contentFit="cover" />
+                          </TouchableOpacity>
+                        ) : (
+                          <View style={styles.recentRowThumbPlaceholder}>
+                            <Ionicons name="image-outline" size={24} color={theme.colors.textMuted} />
+                          </View>
+                        )}
+                      </View>
                     </View>
                   );
                 })}
@@ -254,6 +312,7 @@ export default function StaffStockListScreen() {
           </Pressable>
         </Pressable>
       </Modal>
+      <ImagePreviewModal visible={!!previewUri} uri={previewUri} onClose={() => setPreviewUri(null)} />
     </View>
   );
 }
@@ -280,6 +339,19 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   smallBtnText: { color: '#fff', fontWeight: '700', fontSize: 11 },
+  allStocksBtn: {
+    flex: 1,
+    minWidth: '48%',
+    backgroundColor: theme.colors.surface,
+    paddingVertical: 10,
+    borderRadius: theme.radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    borderWidth: 2,
+    borderColor: theme.colors.primary,
+  },
+  allStocksBtnText: { color: theme.colors.primary, fontWeight: '700', fontSize: 11 },
   sonIslemlerBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -302,18 +374,21 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 15, fontWeight: '800', color: theme.colors.text, marginBottom: 10 },
   productCard: {
     backgroundColor: theme.colors.surface,
-    padding: 14,
+    padding: 18,
     borderRadius: theme.radius.lg,
-    marginBottom: 14,
+    marginBottom: 18,
     borderWidth: 1,
     borderColor: theme.colors.borderLight,
   },
   productCardLow: { borderLeftWidth: 4, borderLeftColor: theme.colors.error },
-  cardName: { fontSize: 15, fontWeight: '700', color: theme.colors.text },
-  cardStock: { fontSize: 13, color: theme.colors.textMuted, marginTop: 4 },
-  cardImageWrap: { width: '100%', aspectRatio: 2, borderRadius: theme.radius.md, overflow: 'hidden', backgroundColor: theme.colors.borderLight, marginVertical: 10 },
+  cardName: { fontSize: 17, fontWeight: '700', color: theme.colors.text },
+  cardStock: { fontSize: 14, color: theme.colors.textMuted, marginTop: 6 },
+  cardImageWrap: { width: '100%', height: 220, borderRadius: theme.radius.md, overflow: 'hidden', backgroundColor: theme.colors.borderLight, marginVertical: 12 },
+  cardImageTouch: { width: '100%', height: '100%' },
   cardImage: { width: '100%', height: '100%' },
-  cardMeta: { fontSize: 12, color: theme.colors.textMuted, marginTop: 2 },
+  cardImagePlaceholder: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.borderLight, minHeight: 220 },
+  cardImagePlaceholderText: { fontSize: 13, color: theme.colors.textMuted, marginTop: 8 },
+  cardMeta: { fontSize: 13, color: theme.colors.textMuted, marginTop: 4 },
   emptyText: { fontSize: 13, color: theme.colors.textMuted, fontStyle: 'italic' },
   modalBackdrop: {
     flex: 1,
@@ -352,6 +427,11 @@ const styles = StyleSheet.create({
   recentModalTitle: { fontSize: 18, fontWeight: '800', color: theme.colors.text, marginBottom: 16 },
   recentModalScroll: { maxHeight: 400 },
   recentRow: { padding: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.colors.borderLight },
+  recentRowMain: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  recentRowTextBlock: { flex: 1 },
+  recentRowThumb: { width: 56, height: 56, borderRadius: 8, overflow: 'hidden', backgroundColor: theme.colors.borderLight },
+  recentRowThumbImage: { width: '100%', height: '100%' },
+  recentRowThumbPlaceholder: { width: 56, height: 56, borderRadius: 8, backgroundColor: theme.colors.borderLight, alignItems: 'center', justifyContent: 'center' },
   recentText: { fontSize: 14, fontWeight: '700', color: theme.colors.text },
   recentMeta: { fontSize: 12, color: theme.colors.textMuted, marginTop: 2 },
   recentStaff: { fontSize: 12, color: theme.colors.textSecondary, marginTop: 2 },

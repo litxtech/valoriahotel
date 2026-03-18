@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Share,
+  Keyboard,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -44,6 +45,7 @@ const recommendedContractBase = (() => {
 
 export default function ContractAppSettings() {
   const insets = useSafeAreaInsets();
+  const scrollRef = useRef<ScrollView>(null);
   const [values, setValues] = useState<Record<string, string>>({
     google_play_url: '',
     app_store_url: '',
@@ -83,6 +85,8 @@ export default function ContractAppSettings() {
   if (contractBase.includes('valoria.app')) contractBase = VERCEL_CONTRACT_BASE;
 
   const copyOrShare = async (text: string, label: string) => {
+    Keyboard.dismiss();
+    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
     try {
       await Share.share({ message: text, title: label });
     } catch (e) {
@@ -91,6 +95,8 @@ export default function ContractAppSettings() {
   };
 
   const generateLobbyToken = async () => {
+    Keyboard.dismiss();
+    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
     setGeneratingToken(true);
     try {
       setSingleQrUrl(FIXED_CONTRACT_QR_URL);
@@ -131,7 +137,7 @@ export default function ContractAppSettings() {
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={insets.top + 56}>
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+      <ScrollView ref={scrollRef} style={styles.scroll} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
         <Text style={styles.sectionTitle}>Tek tip QR → Sözleşme onayı (tek ayar)</Text>
         <View style={styles.recommendedBox}>
           <Text style={styles.recommendedLabel}>Aşağıdaki ilk alana yapıştırın (Vercel/custom domain siteniz):</Text>

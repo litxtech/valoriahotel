@@ -75,6 +75,8 @@ export default function StockManagement() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [previewUri, setPreviewUri] = useState<string | null>(null);
   const [recentDrawerOpen, setRecentDrawerOpen] = useState(false);
+  /** Ürün resmi yoksa son hareketin photo_proof ile göster (admin panelde resim görünsün) */
+  const [lastPhotoByProductId, setLastPhotoByProductId] = useState<Record<string, string>>({});
 
   const loadData = async () => {
     setLoadError(null);
@@ -134,6 +136,23 @@ export default function StockManagement() {
       } catch {
         setRecentMovements([]);
       }
+
+      try {
+        const { data: photoData } = await supabase
+          .from('stock_movements')
+          .select('product_id, photo_proof')
+          .not('photo_proof', 'is', null)
+          .order('created_at', { ascending: false });
+        const byProduct: Record<string, string> = {};
+        for (const m of photoData ?? []) {
+          const pid = (m as { product_id: string }).product_id;
+          const url = (m as { photo_proof: string }).photo_proof;
+          if (pid && url && !(pid in byProduct)) byProduct[pid] = url;
+        }
+        setLastPhotoByProductId(byProduct);
+      } catch {
+        setLastPhotoByProductId({});
+      }
     } catch (e) {
       setLoadError((e as Error)?.message ?? 'Veri yüklenirken hata oluştu');
       setProducts([]);
@@ -170,6 +189,33 @@ export default function StockManagement() {
               await loadData();
             } catch (e) {
               Alert.alert('Hata', (e as Error)?.message ?? 'Ürün silinemedi.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleDeleteEntireStock = () => {
+    Alert.alert(
+      'Stoğu komple sil',
+      'Tüm stok verileri (ürünler, hareketler, uyarılar) kalıcı olarak silinecek. Bu işlem geri alınamaz. Emin misiniz?',
+      [
+        { text: 'İptal', style: 'cancel' },
+        {
+          text: 'Evet, hepsini sil',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await supabase.from('stock_movements').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+              await supabase.from('stock_alerts').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+              await supabase.from('stock_counts').delete().neq('id', '00000000-0000-0000-0000-0000-000000000000');
+              const { error } = await supabase.from('stock_products').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+              if (error) throw error;
+              await loadData();
+              Alert.alert('Tamam', 'Tüm stok verileri silindi.');
+            } catch (e) {
+              Alert.alert('Hata', (e as Error)?.message ?? 'Stok silinemedi.');
             }
           },
         },
@@ -256,7 +302,7 @@ export default function StockManagement() {
         </View>
       )}
 
-      {/* Kategori filtreleri */}
+      {/* Kategori filtreleri + üst aksiyon butonları */}
       <ScrollView
         horizontal
         style={styles.categoriesWrap}
@@ -280,6 +326,28 @@ export default function StockManagement() {
             <Text style={[styles.chipText, selectedCategory === c.id && styles.chipTextActive]}>{c.name}</Text>
           </TouchableOpacity>
         ))}
+        <View style={styles.topActionsWrap}>
+          <TouchableOpacity style={styles.topActionBtn} onPress={handleDeleteEntireStock} activeOpacity={0.8}>
+            <Ionicons name="trash-outline" size={16} color={adminTheme.colors.error} />
+            <Text style={styles.topActionBtnText}>Stoğu sil</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.topActionBtn} onPress={() => router.push('/admin/stock/scan')} activeOpacity={0.8}>
+            <Ionicons name="add-circle-outline" size={16} color={adminTheme.colors.primary} />
+            <Text style={styles.topActionBtnText}>Yeni Ürün</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.topActionBtn} onPress={() => router.push({ pathname: '/admin/stock/movement', params: { type: 'in' } })} activeOpacity={0.8}>
+            <Ionicons name="arrow-down-circle-outline" size={16} color={adminTheme.colors.primary} />
+            <Text style={styles.topActionBtnText}>Stok Girişi</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.topActionBtn} onPress={() => router.push({ pathname: '/admin/stock/movement', params: { type: 'out' } })} activeOpacity={0.8}>
+            <Ionicons name="arrow-up-circle-outline" size={16} color={adminTheme.colors.error} />
+            <Text style={styles.topActionBtnText}>Stok Çıkışı</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.topActionBtn} onPress={() => router.push('/admin/stock/approvals')} activeOpacity={0.8}>
+            <Ionicons name="checkmark-done-outline" size={16} color={adminTheme.colors.primary} />
+            <Text style={styles.topActionBtnText}>Onaylar</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
 
       {/* Son İşlemler – çekmece butonu (tıklanınca açılır) */}
@@ -305,7 +373,6 @@ export default function StockManagement() {
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>📋 TÜM ÜRÜNLER ({filtered.length})</Text>
           </View>
-          <Text style={styles.sectionHint}>Yeni Ürün · Stok Girişi · Stok Çıkışı butonları en altta</Text>
 
           {loading ? (
             <View style={styles.loadingBox}>
@@ -324,7 +391,7 @@ export default function StockManagement() {
           ) : (
           <ScrollView
             style={styles.list}
-            contentContainerStyle={[styles.listContent, { paddingBottom: 140 + footerPaddingBottom }]}
+            contentContainerStyle={[styles.listContent, { paddingBottom: 24 + footerPaddingBottom }]}
             keyboardShouldPersistTaps="handled"
             nestedScrollEnabled
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[adminTheme.colors.accent]} />}
@@ -370,11 +437,24 @@ export default function StockManagement() {
                       </Text>
                     </View>
                     <View style={styles.cardImageWrap}>
-                      <CachedImage
-                        uri={p.image_url || 'https://via.placeholder.com/400x200'}
-                        style={styles.cardImage}
-                        contentFit="cover"
-                      />
+                      {(p.image_url ?? lastPhotoByProductId[p.id]) ? (
+                        <TouchableOpacity
+                          activeOpacity={0.9}
+                          onPress={() => setPreviewUri(p.image_url ?? lastPhotoByProductId[p.id] ?? null)}
+                          style={styles.cardImageTouch}
+                        >
+                          <CachedImage
+                            uri={p.image_url ?? lastPhotoByProductId[p.id] ?? ''}
+                            style={styles.cardImage}
+                            contentFit="cover"
+                          />
+                        </TouchableOpacity>
+                      ) : (
+                        <View style={styles.cardImagePlaceholder}>
+                          <Ionicons name="image-outline" size={40} color={adminTheme.colors.textMuted} />
+                          <Text style={styles.cardImagePlaceholderText}>Ürün resmi yok</Text>
+                        </View>
+                      )}
                     </View>
                     <View style={styles.cardFooter}>
                       <Text style={styles.cardAddedBy}>📦 Ekleyen: {addedBy}</Text>
@@ -421,44 +501,6 @@ export default function StockManagement() {
           )}
         </View>
 
-      {/* Alt aksiyon çubuğu */}
-      <View
-        style={[styles.footer, { paddingBottom: footerPaddingBottom }]}
-        pointerEvents="box-none"
-      >
-        <TouchableOpacity
-          style={styles.footerBtn}
-          onPress={() => router.push('/admin/stock/scan')}
-          activeOpacity={0.85}
-        >
-          <Ionicons name="add-circle-outline" size={20} color={adminTheme.colors.primary} />
-          <Text style={styles.footerBtnText}>Yeni Ürün</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.footerBtn, styles.footerBtnPrimary]}
-          onPress={() => router.push({ pathname: '/admin/stock/movement', params: { type: 'in' } })}
-          activeOpacity={0.85}
-        >
-          <Ionicons name="arrow-down-circle-outline" size={20} color="#fff" />
-          <Text style={[styles.footerBtnText, styles.footerBtnTextWhite]}>Stok Girişi</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.footerBtn, styles.footerBtnOut]}
-          onPress={() => router.push({ pathname: '/admin/stock/movement', params: { type: 'out' } })}
-          activeOpacity={0.85}
-        >
-          <Ionicons name="arrow-up-circle-outline" size={20} color="#fff" />
-          <Text style={[styles.footerBtnText, styles.footerBtnTextWhite]}>Stok Çıkışı</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.footerBtn}
-          onPress={() => router.push('/admin/stock/approvals')}
-          activeOpacity={0.85}
-        >
-          <Ionicons name="checkmark-done-outline" size={20} color={adminTheme.colors.primary} />
-          <Text style={styles.footerBtnText}>Onaylar</Text>
-        </TouchableOpacity>
-      </View>
       {/* Son İşlemler çekmecesi – tıklanınca açılır */}
       <Modal visible={recentDrawerOpen} transparent animationType="slide">
         <Pressable style={styles.drawerOverlay} onPress={() => setRecentDrawerOpen(false)}>
@@ -694,6 +736,32 @@ const styles = StyleSheet.create({
   chipTextActive: {
     color: adminTheme.colors.surface,
   },
+  topActionsWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginLeft: 12,
+    paddingLeft: 12,
+    borderLeftWidth: 1,
+    borderLeftColor: adminTheme.colors.border,
+  },
+  topActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: adminTheme.radius.sm,
+    backgroundColor: adminTheme.colors.surface,
+    borderWidth: 1,
+    borderColor: adminTheme.colors.border,
+  },
+  topActionBtnText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: adminTheme.colors.textSecondary,
+  },
   list: {
     flex: 1,
     minHeight: 180,
@@ -758,15 +826,31 @@ const styles = StyleSheet.create({
   },
   cardImageWrap: {
     width: '100%',
-    aspectRatio: 2,
+    height: 220,
     borderRadius: adminTheme.radius.sm,
     overflow: 'hidden',
     backgroundColor: adminTheme.colors.surfaceTertiary,
-    marginBottom: 8,
+    marginBottom: 10,
+  },
+  cardImageTouch: {
+    width: '100%',
+    height: '100%',
   },
   cardImage: {
     width: '100%',
     height: '100%',
+  },
+  cardImagePlaceholder: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: adminTheme.colors.surfaceTertiary,
+    minHeight: 220,
+  },
+  cardImagePlaceholderText: {
+    fontSize: 13,
+    color: adminTheme.colors.textMuted,
+    marginTop: 8,
   },
   cardFooter: {
     flexDirection: 'row',
@@ -901,9 +985,10 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     zIndex: 10,
-    flexDirection: 'row',
+    flexDirection: 'column',
     paddingHorizontal: adminTheme.spacing.lg,
-    paddingTop: 12,
+    paddingTop: 10,
+    paddingBottom: 12,
     backgroundColor: adminTheme.colors.surface,
     borderTopWidth: 1,
     borderTopColor: adminTheme.colors.border,
@@ -911,6 +996,19 @@ const styles = StyleSheet.create({
     ...adminTheme.shadow.lg,
     ...(Platform.OS === 'android' && { elevation: 8 }),
   },
+  footerRow: { width: '100%', alignItems: 'center' },
+  footerActions: { flexDirection: 'row', gap: 10 },
+  deleteEntireBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: adminTheme.radius.md,
+    backgroundColor: adminTheme.colors.error || '#dc2626',
+  },
+  deleteEntireBtnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
   footerBtn: {
     flex: 1,
     flexDirection: 'column',

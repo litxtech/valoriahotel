@@ -688,7 +688,7 @@ export default function GuestSignOneScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.bg },
+  container: { flex: 1, backgroundColor: '#ffffff' },
   envContainer: { flex: 1, backgroundColor: COLORS.bg, padding: 24 },
   envTitle: { fontSize: 20, fontWeight: '700', color: COLORS.text, marginBottom: 12, textAlign: 'center' },
   envText: { fontSize: 15, color: COLORS.textSecondary, lineHeight: 24, textAlign: 'center' },

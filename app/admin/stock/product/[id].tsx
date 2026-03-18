@@ -264,9 +264,9 @@ const styles = StyleSheet.create({
   errorText: { fontSize: 16, color: adminTheme.colors.error },
   backBtn: { marginTop: 16, paddingVertical: 12, paddingHorizontal: 24, backgroundColor: adminTheme.colors.border },
   backBtnText: { fontSize: 15, fontWeight: '600', color: adminTheme.colors.text },
-  heroImageWrap: { width: '100%', aspectRatio: 1.5, borderRadius: 12, overflow: 'hidden', backgroundColor: adminTheme.colors.surfaceTertiary, marginBottom: 12 },
-  heroImage: { width: '100%', height: '100%' },
-  heroPlaceholder: { flex: 1, alignItems: 'center', justifyContent: 'center', minHeight: 160 },
+  heroImageWrap: { width: '100%', height: 220, borderRadius: 12, overflow: 'hidden', backgroundColor: adminTheme.colors.surfaceTertiary, marginBottom: 12 },
+  heroImage: { width: '100%', height: 220 },
+  heroPlaceholder: { width: '100%', height: 220, alignItems: 'center', justifyContent: 'center', backgroundColor: adminTheme.colors.surfaceTertiary },
   stockBadgeInline: {
     alignSelf: 'flex-start',
     paddingHorizontal: 12,

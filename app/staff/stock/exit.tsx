@@ -189,6 +189,10 @@ export default function StaffStockExitScreen() {
 
       {items.length > 0 && (
         <View style={styles.card}>
+          <View style={styles.exitPromptCard}>
+            <Text style={styles.exitPromptTitle}>Kaç adet çıkış yapacaksınız? Ne için?</Text>
+            <Text style={styles.exitPromptHint}>Her ürün için çıkış miktarını girin ve aşağıdan çıkış nedenini seçin. Kaydettiğinizde stok düşecektir (onay sonrası).</Text>
+          </View>
           <Text style={styles.sectionTitle}>📋 Çıkış yapılacak ürünler</Text>
           {items.map((i) => (
             <View key={i.productId} style={styles.exitBlock}>
@@ -325,6 +329,16 @@ const styles = StyleSheet.create({
   searchItemName: { fontSize: 15, fontWeight: '600', color: theme.colors.text },
   searchItemStock: { fontSize: 12, color: theme.colors.textMuted, marginTop: 2 },
   sectionTitle: { fontSize: 14, fontWeight: '800', color: theme.colors.text, marginBottom: 10 },
+  exitPromptCard: {
+    backgroundColor: `${theme.colors.primary}14`,
+    padding: 14,
+    borderRadius: theme.radius.md,
+    marginBottom: 14,
+    borderLeftWidth: 4,
+    borderLeftColor: theme.colors.primary,
+  },
+  exitPromptTitle: { fontSize: 15, fontWeight: '800', color: theme.colors.text },
+  exitPromptHint: { fontSize: 12, color: theme.colors.textSecondary, marginTop: 6 },
   exitBlock: {
     paddingVertical: 12,
     paddingHorizontal: 0,

@@ -1,5 +1,7 @@
 import React from 'react';
-import { Modal, Pressable, StyleSheet, useWindowDimensions } from 'react-native';
+import { Modal, Pressable, StyleSheet, useWindowDimensions, TouchableOpacity, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { CachedImage } from '@/components/CachedImage';
 
 type ImagePreviewModalProps = {
@@ -8,9 +10,10 @@ type ImagePreviewModalProps = {
   onClose: () => void;
 };
 
-/** Tıklanınca büyük resim önizlemesi açan modal. Stok / profil resimleri için kullan. */
+/** Tıklanınca büyük resim önizlemesi açan modal. Boşluğa tıklayınca veya çarpı ile kapanır. */
 export function ImagePreviewModal({ visible, uri, onClose }: ImagePreviewModalProps) {
   const { width, height } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   if (!uri) return null;
   return (
     <Modal
@@ -20,8 +23,18 @@ export function ImagePreviewModal({ visible, uri, onClose }: ImagePreviewModalPr
       onRequestClose={onClose}
     >
       <Pressable style={styles.overlay} onPress={onClose}>
-        <Pressable style={[styles.content, { maxWidth: width, maxHeight: height }]} onPress={(e) => e.stopPropagation()}>
+        <Pressable style={styles.content} onPress={(e) => e.stopPropagation()}>
           <CachedImage uri={uri} style={[styles.image, { width, height: height * 0.85 }]} contentFit="contain" />
+          <View style={[styles.closeBtnWrap, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
+            <TouchableOpacity
+              style={styles.closeBtn}
+              onPress={onClose}
+              activeOpacity={0.8}
+              accessibilityLabel="Kapat"
+            >
+              <Ionicons name="close" size={28} color="#fff" />
+            </TouchableOpacity>
+          </View>
         </Pressable>
       </Pressable>
     </Modal>
@@ -41,5 +54,21 @@ const styles = StyleSheet.create({
   },
   image: {
     borderRadius: 0,
+  },
+  closeBtnWrap: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    left: 0,
+    alignItems: 'flex-end',
+    paddingRight: 16,
+  },
+  closeBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 });

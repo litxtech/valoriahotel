@@ -321,10 +321,18 @@ export default function StaffStockEntryScreen() {
   const cur = product.current_stock ?? 0;
   const min = product.min_stock ?? 0;
   const isLow = min > 0 && cur <= min;
+  /** Barkod okutuldu ve bu barkoda kayıtlı ürün bulundu → "Bu ürün var, stok sayısı artır" vurgusu */
+  const isExistingProductFromBarcode = !!barcodeParam && !!product;
 
   return (
     <>
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      {isExistingProductFromBarcode && (
+        <View style={styles.existingBarcodeCard}>
+          <Text style={styles.existingBarcodeTitle}>✓ Bu ürün kayıtlı</Text>
+          <Text style={styles.existingBarcodeHint}>Stok sayısını artırmak için aşağıya eklenecek miktarı girin.</Text>
+        </View>
+      )}
       <View style={styles.productCard}>
         <Text style={styles.productName}>{product.name}</Text>
         <Text style={styles.productStock}>Mevcut stok: {cur} {product.unit ?? 'adet'}{isLow ? ' (Kritik)' : ''}</Text>
@@ -408,6 +416,16 @@ const styles = StyleSheet.create({
   searchItem: { flexDirection: 'row', justifyContent: 'space-between', padding: 12, borderBottomWidth: 1, borderBottomColor: '#f3f4f6' },
   searchItemName: { fontSize: 15, fontWeight: '500' },
   searchItemStock: { fontSize: 13, color: '#6b7280' },
+  existingBarcodeCard: {
+    backgroundColor: '#ecfdf5',
+    padding: 14,
+    borderRadius: 12,
+    marginBottom: 16,
+    borderLeftWidth: 4,
+    borderLeftColor: '#059669',
+  },
+  existingBarcodeTitle: { fontSize: 16, fontWeight: '700', color: '#047857' },
+  existingBarcodeHint: { fontSize: 13, color: '#065f46', marginTop: 4 },
   productCard: { backgroundColor: '#fff', padding: 16, borderRadius: 12, marginBottom: 20, borderLeftWidth: 4, borderLeftColor: '#b8860b' },
   productName: { fontSize: 18, fontWeight: '700', color: '#111827' },
   productStock: { fontSize: 14, color: '#6b7280', marginTop: 4 },
