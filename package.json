@@ -1,6 +1,6 @@
 {
   "name": "valoria-hotel",
-  "version": "1.1.0",
+  "version": "2.2.1",
   "main": "expo-router/entry",
   "scripts": {
     "start": "node scripts/dev-host.js",
@@ -9,8 +9,8 @@
     "start:dev:clear": "expo start --dev-client --scheme exp+valoria-hotel --clear",
     "start:dev:tunnel": "expo start --dev-client --tunnel --scheme exp+valoria-hotel",
     "start:go": "expo start --go --clear",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "build": "expo export -p web",
     "vercel-build": "expo export -p web",
     "lint": "expo lint",
@@ -58,6 +58,7 @@
     "expo-splash-screen": "~31.0.13",
     "expo-status-bar": "~3.0.9",
     "expo-text-extractor": "^2.0.0",
+    "expo-updates": "~29.0.16",
     "i18next": "^24.0.0",
     "mrz": "^5.0.2",
     "react": "19.1.0",
