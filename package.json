@@ -83,6 +83,10 @@
     "eslint-config-expo": "~10.0.0",
     "typescript": "~5.9.2"
   },
+  "overrides": {
+    "expo-manifests": "1.0.10",
+    "expo-updates-interface": "2.0.0"
+  },
   "expo": {
     "doctor": {
       "reactNativeDirectoryCheck": {
