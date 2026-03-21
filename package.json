@@ -58,7 +58,6 @@
     "expo-splash-screen": "~31.0.13",
     "expo-status-bar": "~3.0.9",
     "expo-text-extractor": "^2.0.0",
-    "expo-updates": "~29.0.16",
     "i18next": "^24.0.0",
     "mrz": "^5.0.2",
     "react": "19.1.0",
@@ -82,10 +81,6 @@
     "eslint": "^9.0.0",
     "eslint-config-expo": "~10.0.0",
     "typescript": "~5.9.2"
-  },
-  "overrides": {
-    "expo-manifests": "1.0.10",
-    "expo-updates-interface": "2.0.0"
   },
   "expo": {
     "doctor": {
