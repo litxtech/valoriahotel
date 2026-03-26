@@ -14,8 +14,11 @@ import {
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
+import { invokeEdgeWithAuth } from '@/lib/invokeEdgeWithAuth';
+import { getEdgeFunctionErrorMessage } from '@/lib/functionsError';
 import { useAuthStore } from '@/stores/authStore';
 import { StaffNameWithBadge } from '@/components/VerifiedBadge';
+import { CachedImage } from '@/components/CachedImage';
 import { AdminCard } from '@/components/admin';
 import { adminTheme } from '@/constants/adminTheme';
 
@@ -50,6 +53,7 @@ type GuestRow = {
   deleted_at?: string | null;
   last_login_device_id?: string | null;
   is_guest_app_account?: boolean;
+  photo_url?: string | null;
 };
 
 const BAN_DURATIONS = [
@@ -78,18 +82,20 @@ export default function StaffListScreen() {
   const [riskyDeviceIds, setRiskyDeviceIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<StaffRow | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<StaffRow | GuestRow | null>(null);
   const [adminReason, setAdminReason] = useState('');
   const [deleting, setDeleting] = useState(false);
-  const [banTarget, setBanTarget] = useState<StaffRow | null>(null);
+  const [banTarget, setBanTarget] = useState<StaffRow | GuestRow | null>(null);
   const [banHours, setBanHours] = useState(24);
   const [banReason, setBanReason] = useState('');
   const [banning, setBanning] = useState(false);
   const [passwordTarget, setPasswordTarget] = useState<StaffRow | null>(null);
   const [newPassword, setNewPassword] = useState('');
   const [changingPassword, setChangingPassword] = useState(false);
+  const [guestLoadError, setGuestLoadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    setGuestLoadError(null);
     const now = new Date().toISOString();
     const [
       staffRes,
@@ -116,10 +122,11 @@ export default function StaffListScreen() {
     }
 
     if (guestsRes.error) {
+      setGuestLoadError(guestsRes.error.message || 'Misafir listesi yüklenemedi');
       setGuestList([]);
-      return;
+    } else {
+      setGuestList((guestsRes.data ?? []) as GuestRow[]);
     }
-    setGuestList((guestsRes.data ?? []) as GuestRow[]);
 
     const ids = new Set<string>();
     for (const r of [...(staffDeleted.data ?? []), ...(staffBanned.data ?? []), ...(guestsDeleted.data ?? []), ...(guestsBanned.data ?? [])]) {
@@ -144,9 +151,11 @@ export default function StaffListScreen() {
     setBanning(true);
     try {
       const until = new Date(Date.now() + banHours * 60 * 60 * 1000).toISOString();
+      const payload = { banned_until: until, banned_by: currentStaffId, ban_reason: banReason.trim() || null };
+      const isStaff = 'auth_id' in banTarget;
       const { error } = await supabase
-        .from('staff')
-        .update({ banned_until: until, banned_by: currentStaffId, ban_reason: banReason.trim() || null })
+        .from(isStaff ? 'staff' : 'guests')
+        .update(payload)
         .eq('id', banTarget.id);
       if (error) throw error;
       setBanTarget(null);
@@ -161,9 +170,13 @@ export default function StaffListScreen() {
     }
   };
 
-  const unban = async (row: StaffRow) => {
+  const unban = async (row: StaffRow | GuestRow) => {
     try {
-      await supabase.from('staff').update({ banned_until: null, banned_by: null, ban_reason: null }).eq('id', row.id);
+      const isStaff = 'auth_id' in row;
+      await supabase
+        .from(isStaff ? 'staff' : 'guests')
+        .update({ banned_until: null, banned_by: null, ban_reason: null })
+        .eq('id', row.id);
       await load();
     } catch (e) {
       Alert.alert('Hata', (e as Error)?.message ?? 'Ban kaldırılamadı.');
@@ -180,8 +193,12 @@ export default function StaffListScreen() {
       const { data, error } = await supabase.functions.invoke('admin-update-user', {
         body: { target_auth_id: passwordTarget.auth_id, new_password: newPassword },
       });
-      if (error) throw error;
-      if ((data as { error?: string })?.error) throw new Error((data as { error: string }).error);
+      const payload = data as { success?: boolean; error?: string };
+      const serverError = payload?.error;
+      if (error) {
+        throw new Error(serverError || (error as Error)?.message || 'Şifre güncellenemedi.');
+      }
+      if (serverError || payload?.success === false) throw new Error(serverError || 'Şifre güncellenemedi.');
       setPasswordTarget(null);
       setNewPassword('');
       Alert.alert('Başarılı', 'Şifre güncellendi.');
@@ -192,33 +209,61 @@ export default function StaffListScreen() {
     }
   };
 
-  const confirmDeleteStaff = async () => {
+  const confirmDelete = async () => {
     if (!deleteTarget || !adminReason.trim()) {
       Alert.alert('Eksik', 'Silme nedenini girin.');
       return;
     }
-    if (deleteTarget.id === currentStaffId) {
+    const isStaff = 'auth_id' in deleteTarget;
+    if (isStaff && (deleteTarget as StaffRow).id === currentStaffId) {
       Alert.alert('Hata', 'Kendi hesabınızı buradan silemezsiniz. Profil ayarlarından hesabınızı silebilirsiniz.');
       return;
     }
     setDeleting(true);
     try {
-      const { data, error } = await supabase.functions.invoke('delete-user-account', {
-        body: {
+      if (isStaff) {
+        const { data, error } = await invokeEdgeWithAuth('delete-user-account', {
           mode: 'admin',
-          target_auth_id: deleteTarget.auth_id,
+          target_auth_id: (deleteTarget as StaffRow).auth_id,
           user_type: 'staff',
           admin_reason: adminReason.trim(),
-        },
-      });
-      if (error) throw error;
-      if ((data as { error?: string })?.error) throw new Error((data as { error: string }).error);
+        });
+        if (error) throw error;
+        if ((data as { error?: string })?.error) throw new Error((data as { error: string }).error);
+      } else {
+        const guest = deleteTarget as GuestRow;
+        if (guest.auth_user_id) {
+          const { data, error } = await invokeEdgeWithAuth('delete-user-account', {
+            mode: 'admin',
+            target_auth_id: guest.auth_user_id,
+            user_type: 'guest',
+            admin_reason: adminReason.trim(),
+          });
+          if (error) throw error;
+          if ((data as { error?: string })?.error) throw new Error((data as { error: string }).error);
+        } else {
+          const now = new Date().toISOString();
+          const { error } = await supabase
+            .from('guests')
+            .update({
+              deleted_at: now,
+              deleted_by: currentStaffId,
+              deletion_reason: adminReason.trim(),
+              email: 'silindi@' + guest.id.slice(0, 8) + '.local',
+              full_name: 'Silindi',
+              phone: null,
+            })
+            .eq('id', guest.id);
+          if (error) throw error;
+        }
+      }
       setDeleteTarget(null);
       setAdminReason('');
       await load();
       Alert.alert('Başarılı', 'Hesap silindi. Kullanıcı uygulama açtığında "Hesabınız silindi" görüp lobiye dönecek.');
     } catch (e) {
-      Alert.alert('Hata', (e as Error)?.message ?? 'Hesap silinemedi.');
+      const msg = await getEdgeFunctionErrorMessage(e);
+      Alert.alert('Hata', msg || 'Hesap silinemedi.');
     } finally {
       setDeleting(false);
     }
@@ -366,7 +411,15 @@ export default function StaffListScreen() {
           ))
         ) : null}
 
-        {tab === 'guests' && guestList.length === 0 ? (
+        {tab === 'guests' && guestLoadError ? (
+          <View style={[styles.empty, { padding: 20 }]}>
+            <Ionicons name="warning-outline" size={48} color={adminTheme.colors.error} />
+            <Text style={[styles.emptyText, { color: adminTheme.colors.error, textAlign: 'center' }]}>{guestLoadError}</Text>
+            <TouchableOpacity style={{ marginTop: 12, padding: 10 }} onPress={() => load()}>
+              <Text style={{ color: adminTheme.colors.primary, fontWeight: '600' }}>Tekrar dene</Text>
+            </TouchableOpacity>
+          </View>
+        ) : tab === 'guests' && guestList.length === 0 ? (
           <View style={styles.empty}>
             <Ionicons name="people-outline" size={48} color={adminTheme.colors.textMuted} />
             <Text style={styles.emptyText}>Henüz misafir kaydı yok</Text>
@@ -384,9 +437,13 @@ export default function StaffListScreen() {
               >
                 <View style={styles.rowLeft}>
                   <View style={styles.avatarGuest}>
-                    <Text style={styles.avatarTextDark}>
-                      {(row.full_name || row.email || row.phone || '?').charAt(0).toUpperCase()}
-                    </Text>
+                    {row.photo_url ? (
+                      <CachedImage uri={row.photo_url} style={styles.avatarGuestImg} contentFit="cover" />
+                    ) : (
+                      <Text style={styles.avatarTextDark}>
+                        {(row.full_name || row.email || row.phone || '?').charAt(0).toUpperCase()}
+                      </Text>
+                    )}
                   </View>
                   <View style={styles.rowBody}>
                     <Text style={styles.name} numberOfLines={1}>
@@ -398,7 +455,7 @@ export default function StaffListScreen() {
                     <View style={styles.badges}>
                       {row.is_guest_app_account && (
                         <View style={styles.badgeGuestApp}>
-                          <Text style={styles.badgeText}>Misafir hesap</Text>
+                          <Text style={styles.badgeText}>Misafir hesap (Guest app)</Text>
                         </View>
                       )}
                       {row.deleted_at && (
@@ -421,6 +478,22 @@ export default function StaffListScreen() {
                 </View>
                 <Ionicons name="chevron-forward" size={20} color={adminTheme.colors.textMuted} />
               </TouchableOpacity>
+              {!row.deleted_at && (
+                <View style={styles.actionRow}>
+                  {row.banned_until && new Date(row.banned_until) > new Date() ? (
+                    <TouchableOpacity style={styles.actionBtn} onPress={() => unban(row)} hitSlop={8}>
+                      <Text style={styles.unbanBtnText}>Kaldır</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <TouchableOpacity style={styles.actionBtn} onPress={() => setBanTarget(row)} hitSlop={8}>
+                      <Ionicons name="ban-outline" size={18} color={adminTheme.colors.warning} />
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity style={styles.actionBtn} onPress={() => setDeleteTarget(row)} hitSlop={8}>
+                    <Ionicons name="trash-outline" size={18} color={adminTheme.colors.error} />
+                  </TouchableOpacity>
+                </View>
+              )}
             </View>
           ))
         ) : null}
@@ -432,7 +505,7 @@ export default function StaffListScreen() {
             <Text style={styles.modalTitle}>Kullanıcıyı banla</Text>
             {banTarget && (
               <Text style={styles.modalSubtitle}>
-                {banTarget.full_name || banTarget.email} — süre seçin
+                {banTarget.full_name || banTarget.email || ('phone' in banTarget ? banTarget.phone : null) || '—'} — süre seçin
               </Text>
             )}
             <Text style={styles.modalLabel}>Süre</Text>
@@ -507,7 +580,7 @@ export default function StaffListScreen() {
             <Text style={styles.modalTitle}>Hesap silme</Text>
             {deleteTarget && (
               <Text style={styles.modalSubtitle}>
-                {deleteTarget.full_name || deleteTarget.email} hesabını platform tarafından silmek istediğinize emin misiniz? Kullanıcı uygulama açtığında "Hesabınız silindi" görüp lobiye dönecek.
+                {deleteTarget.full_name || deleteTarget.email || ('phone' in deleteTarget ? deleteTarget.phone : null) || '—'} hesabını platform tarafından silmek istediğinize emin misiniz? Kullanıcı uygulama açtığında "Hesabınız silindi" görüp lobiye dönecek.
               </Text>
             )}
             <Text style={styles.modalLabel}>Silme nedeni (zorunlu)</Text>
@@ -526,7 +599,7 @@ export default function StaffListScreen() {
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalConfirm, deleting && styles.modalConfirmDisabled]}
-                onPress={confirmDeleteStaff}
+                onPress={confirmDelete}
                 disabled={deleting}
               >
                 {deleting ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.modalConfirmText}>Hesabı sil</Text>}
@@ -580,7 +653,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
+    overflow: 'hidden',
   },
+  avatarGuestImg: { width: 44, height: 44, borderRadius: 22 },
   avatarInactive: { backgroundColor: adminTheme.colors.textMuted, opacity: 0.8 },
   avatarText: { fontSize: 18, fontWeight: '700', color: '#fff' },
   avatarTextDark: { fontSize: 18, fontWeight: '700', color: adminTheme.colors.text },

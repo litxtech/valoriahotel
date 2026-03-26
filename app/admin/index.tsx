@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,17 +9,16 @@ import {
   useWindowDimensions,
   Platform,
   Animated,
-  Image,
-  Alert,
 } from 'react-native';
-import { Link, useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
+import { staffListConversations } from '@/lib/messagingApi';
 import { useAuthStore } from '@/stores/authStore';
+import { useAdminBadgeDismissedStore } from '@/stores/adminBadgeDismissedStore';
 import { adminTheme } from '@/constants/adminTheme';
 import { AdminButton, AdminCard } from '@/components/admin';
-import { CachedImage } from '@/components/CachedImage';
 
 type Stats = {
   roomsTotal: number;
@@ -29,19 +28,10 @@ type Stats = {
   stockPending: number;
   staffPending: number;
   unreadNotifs: number;
+  messagesUnread: number;
   feedTotal: number;
   reportsPending: number;
   acceptancesUnassigned: number;
-};
-
-type FeedPostRow = {
-  id: string;
-  title: string | null;
-  media_type: 'image' | 'video' | 'text';
-  media_url: string | null;
-  thumbnail_url: string | null;
-  created_at: string;
-  staff: { full_name: string | null; department: string | null } | null;
 };
 
 const COLS = 2;
@@ -67,15 +57,15 @@ const SECTIONS: { title: string; subtitle?: string; items: SectionItem[] }[] = [
       { href: '/admin/housekeeping', icon: 'leaf-outline', label: 'Housekeeping' },
       { href: '/admin/guests', icon: 'people-outline', label: 'Misafirler' },
       { href: '/admin/report', icon: 'document-text-outline', label: 'Günlük rapor' },
+      { href: '/admin/stays', icon: 'bed-outline', label: 'Konaklama geçmişi' },
       { href: '/admin/hmb-reports', icon: 'document-attach-outline', label: 'HMB Raporu (Maliye)' },
     ],
   },
   {
     title: 'İletişim',
-    subtitle: 'Mesaj ve bildirimler',
+    subtitle: 'Paylaşımlar ve duyurular',
     items: [
-      { href: '/admin/messages', icon: 'chatbubbles-outline', label: 'Mesajlar' },
-      { href: '/admin/notifications', icon: 'notifications-outline', label: 'Bildirimler', badge: 0 },
+      { href: '/admin/feed', icon: 'images-outline', label: 'Paylaşımlar' },
       { href: '/admin/notifications/bulk', icon: 'megaphone-outline', label: 'Toplu duyuru' },
       { href: '/admin/reports', icon: 'flag-outline', label: 'Şikayetler (paylaşım bildirimleri)', badge: 0 },
     ],
@@ -85,8 +75,10 @@ const SECTIONS: { title: string; subtitle?: string; items: SectionItem[] }[] = [
     subtitle: 'Envanter ve onay bekleyenler',
     items: [
       { href: '/admin/stock', icon: 'cube-outline', label: 'Stok yönetimi' },
+      { href: '/admin/stock/all', icon: 'layers-outline', label: 'Tüm stoklar' },
       { href: '/admin/stock/approvals', icon: 'checkmark-done-outline', label: 'Onay bekleyenler', badge: 0 },
       { href: '/admin/expenses', icon: 'wallet-outline', label: 'Personel harcamaları', badge: 0 },
+      { href: '/admin/carbon', icon: 'leaf-outline', label: 'Karbon girdileri' },
       { href: '/admin/salary', icon: 'cash-outline', label: 'Maaş yönetimi' },
     ],
   },
@@ -94,6 +86,7 @@ const SECTIONS: { title: string; subtitle?: string; items: SectionItem[] }[] = [
     title: 'Erişim & Güvenlik',
     items: [
       { href: '/admin/access', icon: 'key-outline', label: 'Geçiş kontrolü' },
+      { href: '/admin/cameras', icon: 'videocam-outline', label: 'Kamera yönetimi' },
       { href: '/admin/permissions', icon: 'shield-checkmark-outline', label: 'İzinler' },
     ],
   },
@@ -101,7 +94,11 @@ const SECTIONS: { title: string; subtitle?: string; items: SectionItem[] }[] = [
     title: 'Kurumsal & Ayarlar',
     subtitle: 'Sözleşmeler ve personel',
     items: [
+      { href: '/admin/profile', icon: 'person-circle-outline', label: 'Profilim (hesap düzenle)' },
+      { href: '/admin/app-links', icon: 'link-outline', label: 'Uygulamalar & Web Siteleri' },
+      { href: '/admin/settings/printer', icon: 'print-outline', label: 'Yazici ayarlari' },
       { href: '/admin/contracts', icon: 'document-outline', label: 'Sözleşmeler' },
+      { href: '/admin/contracts/all', icon: 'document-text-outline', label: 'Tüm Sözleşmelerim' },
       { href: '/admin/staff', icon: 'person-add-outline', label: 'Çalışan ekleme', badge: 0 },
       { href: '/admin/staff/list', icon: 'people-outline', label: 'Kullanıcılar listesi' },
       { href: '/admin/qr-designs', icon: 'qr-code-outline', label: 'QR tasarımları' },
@@ -153,11 +150,11 @@ export default function AdminDashboard() {
     stockPending: 0,
     staffPending: 0,
     unreadNotifs: 0,
+    messagesUnread: 0,
     feedTotal: 0,
     reportsPending: 0,
     acceptancesUnassigned: 0,
   });
-  const [feedPosts, setFeedPosts] = useState<FeedPostRow[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
@@ -171,9 +168,9 @@ export default function AdminDashboard() {
       staffPendingRes,
       unreadRes,
       feedCountRes,
-      feedDataRes,
       reportsPendingRes,
       acceptancesUnassignedRes,
+      conversationsList,
     ] = await Promise.all([
       supabase.from('rooms').select('*', { count: 'exact', head: true }),
       supabase.from('rooms').select('*', { count: 'exact', head: true }).eq('status', 'occupied'),
@@ -183,15 +180,12 @@ export default function AdminDashboard() {
       supabase.from('staff_applications').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
       supabase.from('notifications').select('id', { count: 'exact', head: true }).eq('staff_id', staff.id).is('read_at', null),
       supabase.from('feed_posts').select('*', { count: 'exact', head: true }),
-      supabase
-        .from('feed_posts')
-        .select('id, title, media_type, media_url, thumbnail_url, created_at, staff:staff_id(full_name, department)')
-        .order('created_at', { ascending: false })
-        .limit(12),
       supabase.from('feed_post_reports').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
       supabase.from('contract_acceptances').select('id', { count: 'exact', head: true }).is('assigned_staff_id', null),
+      staffListConversations(staff.id),
     ]);
 
+    const messagesUnread = (conversationsList ?? []).reduce((s, c) => s + (c.unread_count ?? 0), 0);
     setStats({
       roomsTotal: roomsRes.count ?? 0,
       roomsOccupied: roomsOccupiedRes.count ?? 0,
@@ -200,16 +194,22 @@ export default function AdminDashboard() {
       stockPending: stockRes.count ?? 0,
       staffPending: staffPendingRes.count ?? 0,
       unreadNotifs: unreadRes.count ?? 0,
+      messagesUnread,
       feedTotal: feedCountRes.count ?? 0,
       reportsPending: reportsPendingRes.count ?? 0,
       acceptancesUnassigned: acceptancesUnassignedRes.count ?? 0,
     });
-    setFeedPosts((feedDataRes.data ?? []) as FeedPostRow[]);
   }, [staff?.id]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -223,43 +223,33 @@ export default function AdminDashboard() {
   const cardSize = (sectionInnerWidth - GAP) / COLS;
   const statCardSize = (contentWidth - GAP) / 2;
 
-  const getBadge = (sectionTitle: string, itemLabel: string): number | undefined => {
-    if (itemLabel.includes('Bildirimler')) return stats.unreadNotifs;
-    if (itemLabel.includes('Onay bekleyenler')) return stats.stockPending;
-    if (itemLabel.includes('Çalışan ekleme')) return stats.staffPending;
-    if (itemLabel.includes('Şikayetler')) return stats.reportsPending;
-    if (itemLabel.includes('Sözleşmeler')) return stats.acceptancesUnassigned;
-    return undefined;
+  const { getEffectiveBadge, setDismissed } = useAdminBadgeDismissedStore();
+
+  const getBadgeKey = (itemLabel: string): keyof typeof stats | null => {
+    if (itemLabel.includes('Onay bekleyenler')) return 'stockPending';
+    if (itemLabel.includes('Çalışan ekleme')) return 'staffPending';
+    if (itemLabel.includes('Şikayetler')) return 'reportsPending';
+    if (itemLabel.includes('Sözleşmeler')) return 'acceptancesUnassigned';
+    return null;
   };
 
-  const handleDeletePost = useCallback(
-    (post: FeedPostRow) => {
-      Alert.alert(
-        'Paylaşımı sil',
-        'Bu paylaşım kalıcı olarak silinecek. Emin misiniz?',
-        [
-          { text: 'İptal', style: 'cancel' },
-          {
-            text: 'Sil',
-            style: 'destructive',
-            onPress: async () => {
-              const { error } = await supabase.from('feed_posts').delete().eq('id', post.id);
-              if (error) {
-                Alert.alert('Hata', error.message);
-                return;
-              }
-              setFeedPosts((prev) => prev.filter((p) => p.id !== post.id));
-              setStats((s) => ({ ...s, feedTotal: Math.max(0, s.feedTotal - 1) }));
-            },
-          },
-        ]
-      );
-    },
-    []
-  );
+  const getBadge = (sectionTitle: string, itemLabel: string): number | undefined => {
+    const key = getBadgeKey(itemLabel);
+    if (!key) return undefined;
+    const raw = stats[key];
+    if (raw == null) return undefined;
+    const effective = getEffectiveBadge(key as any, raw);
+    return effective > 0 ? effective : undefined;
+  };
 
-  const feedPreviewUri = (p: FeedPostRow) =>
-    p.thumbnail_url || (p.media_type === 'image' ? p.media_url : null);
+  const handleTilePress = (item: SectionItem, sectionTitle: string) => {
+    const key = getBadgeKey(item.label);
+    if (key) {
+      const raw = stats[key];
+      if (raw != null && raw > 0) setDismissed(key as any, raw);
+    }
+    router.push(item.href as any);
+  };
 
   return (
     <ScrollView
@@ -311,7 +301,7 @@ export default function AdminDashboard() {
         <TouchableOpacity
           style={[styles.statCard, { width: statCardSize, minHeight: 100 }]}
           activeOpacity={0.9}
-          onPress={() => router.push('/customer')}
+          onPress={() => router.push('/admin/feed')}
         >
           <View style={[styles.statIconWrap, styles.statIconWrapAccent]}>
             <Ionicons name="images" size={22} color={adminTheme.colors.accent} />
@@ -319,72 +309,6 @@ export default function AdminDashboard() {
           <Text style={styles.statNumber}>{stats.feedTotal}</Text>
           <Text style={styles.statLabel}>Paylaşım</Text>
         </TouchableOpacity>
-      </View>
-
-      {/* Paylaşımlar kartı — içerik önizlemesi (resim/video/metin) + sil */}
-      <View style={styles.section}>
-        <AdminCard>
-          <View style={[styles.sectionHead, styles.sectionHeadRow]}>
-            <Text style={styles.sectionTitle}>Paylaşımlar</Text>
-            <TouchableOpacity onPress={() => router.push('/customer')} activeOpacity={0.8} style={styles.sectionLinkBtn}>
-              <Text style={styles.sectionLink}>Tümü</Text>
-              <Ionicons name="chevron-forward" size={18} color={adminTheme.colors.accent} />
-            </TouchableOpacity>
-          </View>
-          {feedPosts.length === 0 ? (
-            <Text style={styles.feedEmpty}>Henüz paylaşım yok.</Text>
-          ) : (
-            feedPosts.map((p, idx) => {
-              const previewUri = feedPreviewUri(p);
-              let previewContent: ReactNode;
-              if (p.media_type === 'image' && previewUri) {
-                previewContent = <CachedImage uri={previewUri} style={styles.feedPreviewImage} contentFit="cover" />;
-              } else if (p.media_type === 'video') {
-                previewContent = previewUri
-                  ? <CachedImage uri={previewUri} style={styles.feedPreviewImage} contentFit="cover" />
-                  : (
-                    <View style={styles.feedPreviewPlaceholder}>
-                      <Ionicons name="videocam" size={24} color={adminTheme.colors.accent} />
-                    </View>
-                  );
-              } else {
-                previewContent = (
-                  <View style={styles.feedPreviewPlaceholder}>
-                    <Ionicons name="document-text" size={24} color={adminTheme.colors.textMuted} />
-                  </View>
-                );
-              }
-              return (
-                <View key={p.id} style={[styles.feedItem, idx === feedPosts.length - 1 && styles.feedItemLast]}>
-                  {/* İçerik önizlemesi: resim / video / metin */}
-                  <View style={styles.feedPreviewWrap}>
-                    {previewContent}
-                  </View>
-                  <View style={styles.feedBody}>
-                    <Text style={styles.feedItemTitle} numberOfLines={2}>
-                      {p.title || (p.media_type === 'video' ? 'Video' : p.media_type === 'image' ? 'Fotoğraf' : 'Metin paylaşımı')}
-                    </Text>
-                    <Text style={styles.feedItemMeta}>
-                      {(p.staff as { full_name?: string } | null)?.full_name ?? 'Personel'}
-                      {(p.staff as { department?: string } | null)?.department
-                        ? ` · ${(p.staff as { department: string }).department}`
-                        : ''}
-                      {' · '}
-                      {new Date(p.created_at).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', year: 'numeric' })}
-                    </Text>
-                  </View>
-                  <TouchableOpacity
-                    onPress={() => handleDeletePost(p)}
-                    style={styles.feedDeleteBtn}
-                    hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                  >
-                    <Ionicons name="trash-outline" size={22} color={adminTheme.colors.error} />
-                  </TouchableOpacity>
-                </View>
-              );
-            })
-          )}
-        </AdminCard>
       </View>
 
       {/* Bölümler — AdminCard + canlı kachelar */}
@@ -405,7 +329,7 @@ export default function AdminDashboard() {
                   <AnimatedTile
                     key={idx}
                     style={{ width: cardSize, minHeight: cardSize * 1.05 }}
-                    onPress={() => router.push(item.href as any)}
+                    onPress={() => handleTilePress(item, section.title)}
                   >
                     {showBadge && (
                       <View style={styles.tileBadge}>
@@ -534,61 +458,6 @@ const styles = StyleSheet.create({
     color: adminTheme.colors.accent,
     fontWeight: '600',
     marginRight: 4,
-  },
-
-  feedEmpty: {
-    fontSize: 14,
-    color: adminTheme.colors.textMuted,
-    textAlign: 'center',
-    paddingVertical: 24,
-  },
-  feedItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 4,
-    borderBottomWidth: 1,
-    borderBottomColor: adminTheme.colors.borderLight,
-  },
-  feedItemLast: {
-    borderBottomWidth: 0,
-  },
-  feedPreviewWrap: {
-    width: 56,
-    height: 56,
-    borderRadius: 10,
-    overflow: 'hidden',
-    backgroundColor: adminTheme.colors.surfaceTertiary,
-    marginRight: 12,
-  },
-  feedPreviewImage: {
-    width: 56,
-    height: 56,
-  },
-  feedPreviewPlaceholder: {
-    width: 56,
-    height: 56,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: adminTheme.colors.surfaceTertiary,
-  },
-  feedBody: {
-    flex: 1,
-    minWidth: 0,
-  },
-  feedDeleteBtn: {
-    padding: 8,
-    marginLeft: 4,
-  },
-  feedItemTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: adminTheme.colors.text,
-  },
-  feedItemMeta: {
-    fontSize: 12,
-    color: adminTheme.colors.textMuted,
-    marginTop: 2,
   },
 
   tileGrid: {

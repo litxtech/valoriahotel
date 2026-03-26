@@ -12,6 +12,8 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '@/lib/supabase';
 import { uriToArrayBuffer, getMimeAndExt } from '@/lib/uploadMedia';
+import { ensureCameraPermission } from '@/lib/cameraPermission';
+import { ensureMediaLibraryPermission } from '@/lib/mediaLibraryPermission';
 import { useAuthStore } from '@/stores/authStore';
 import { CachedImage } from '@/components/CachedImage';
 import { ImagePreviewModal } from '@/components/ImagePreviewModal';
@@ -92,11 +94,12 @@ export default function StaffStockEntryScreen() {
   };
 
   const takeProductPhoto = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('İzin', 'Fotoğraf çekmek için kamera erişimi gerekli.');
-      return;
-    }
+    const granted = await ensureCameraPermission({
+      title: 'Kamera izni',
+      message: 'Stok ürünü fotoğrafı çekmek için kamera erişimi gerekiyor.',
+      settingsMessage: 'Kamera izni kapalı. Stok fotoğrafı için ayarlardan izin verin.',
+    });
+    if (!granted) return;
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
@@ -121,9 +124,12 @@ export default function StaffStockEntryScreen() {
   };
 
   const pickProductPhoto = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('İzin', 'Galeri erişimi gerekli.');
+    const granted = await ensureMediaLibraryPermission({
+      title: 'Galeri izni',
+      message: 'Stok urunu fotografi secmek icin galeri erisimi istiyoruz.',
+      settingsMessage: 'Galeri izni kapali. Stok fotografi icin ayarlardan izin verin.',
+    });
+    if (!granted) {
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -211,7 +217,9 @@ export default function StaffStockEntryScreen() {
       body: 'Yeni stok hareketi onayınızı bekliyor.',
       data: { url: '/admin/stock/approvals' },
     }).catch(() => {});
-    Alert.alert('Kaydedildi', 'Stok girişiniz admin onayından sonra işlenecek.', () => router.replace('/staff/stock/entry'));
+    Alert.alert('Kaydedildi', 'Stok girişiniz admin onayından sonra işlenecek.', [
+      { text: 'Tamam', onPress: () => router.replace('/staff/stock/entry') },
+    ]);
   };
 
   const clearProduct = () => router.replace('/staff/stock/entry');
@@ -231,11 +239,11 @@ export default function StaffStockEntryScreen() {
           <Text style={styles.barcodeInfoHint}>Bu barkoda kayıtlı ürün yok. Aşağıya ürün adını (ismini) yazın; arama yaparken bu isimle aranacak.</Text>
         </View>
         <Text style={styles.label}>Ürün adı *</Text>
-        <TextInput style={styles.input} placeholder="Ürün ismi yazın (örn: Coca Cola 330ml)" value={productNameFree} onChangeText={setProductNameFree} />
+        <TextInput style={styles.input} placeholder="Ürün ismi yazın (örn: Coca Cola 330ml)" placeholderTextColor="#6b7280" value={productNameFree} onChangeText={setProductNameFree} />
         <Text style={styles.label}>Teslim alan kişi (isim)</Text>
-        <TextInput style={styles.input} placeholder="Teslim alan kişi adı" value={receivedByName} onChangeText={setReceivedByName} />
+        <TextInput style={styles.input} placeholder="Teslim alan kişi adı" placeholderTextColor="#6b7280" value={receivedByName} onChangeText={setReceivedByName} />
         <Text style={styles.label}>Eklenecek miktar (adet)</Text>
-        <TextInput style={styles.input} placeholder="0" keyboardType="numeric" value={quantity} onChangeText={setQuantity} />
+        <TextInput style={styles.input} placeholder="0" placeholderTextColor="#6b7280" keyboardType="numeric" value={quantity} onChangeText={setQuantity} />
         <Text style={styles.label}>Ürün fotoğrafı (isteğe bağlı)</Text>
         {photo ? (
           <View style={styles.photoWrap}>
@@ -255,7 +263,7 @@ export default function StaffStockEntryScreen() {
           </View>
         )}
         <Text style={styles.label}>Not</Text>
-        <TextInput style={[styles.input, styles.textArea]} placeholder="Açıklama..." multiline numberOfLines={2} value={notes} onChangeText={setNotes} />
+        <TextInput style={[styles.input, styles.textArea]} placeholder="Açıklama..." placeholderTextColor="#6b7280" multiline numberOfLines={2} value={notes} onChangeText={setNotes} />
         <TouchableOpacity style={styles.backLink} onPress={() => router.replace('/staff/stock/entry')}>
           <Text style={styles.changeProductBtnText}>← Başka ürün seç / Barkod okut</Text>
         </TouchableOpacity>
@@ -282,17 +290,25 @@ export default function StaffStockEntryScreen() {
           <Text style={styles.barcodeBtnText}>📷 Barkod Okut</Text>
         </TouchableOpacity>
         <TouchableOpacity
+          style={styles.manuelBarkodsuzBtn}
+          onPress={() => router.push('/staff/stock/manual')}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.manuelBarkodsuzBtnText}>✏️ Manuel Giriş – Barkodsuz ürün</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
           style={styles.manuelGirisBtn}
           onPress={() => searchInputRef.current?.focus()}
           activeOpacity={0.8}
         >
-          <Text style={styles.manuelGirisBtnText}>✏️ Manuel giriş – Ürün listesinden seç</Text>
+          <Text style={styles.manuelGirisBtnText}>📋 Ürün listesinden seç</Text>
         </TouchableOpacity>
         <Text style={styles.label}>Ürün adı ile ara</Text>
         <TextInput
           ref={searchInputRef}
           style={styles.input}
           placeholder="Ürün ismi yazın (en az 2 karakter)..."
+          placeholderTextColor="#6b7280"
           value={search}
           onChangeText={setSearch}
         />
@@ -319,7 +335,6 @@ export default function StaffStockEntryScreen() {
 
   // Ürün seçilmiş: miktar, fotoğraf, not, gönder
   const cur = product.current_stock ?? 0;
-  const min = product.min_stock ?? 0;
   const isLow = cur <= 3;
   /** Barkod okutuldu ve bu barkoda kayıtlı ürün bulundu → "Bu ürün var, stok sayısı artır" vurgusu */
   const isExistingProductFromBarcode = !!barcodeParam && !!product;
@@ -345,6 +360,7 @@ export default function StaffStockEntryScreen() {
       <TextInput
         style={styles.input}
         placeholder="0"
+        placeholderTextColor="#6b7280"
         keyboardType="numeric"
         value={quantity}
         onChangeText={setQuantity}
@@ -370,7 +386,7 @@ export default function StaffStockEntryScreen() {
       )}
 
       <Text style={styles.label}>Not</Text>
-      <TextInput style={[styles.input, styles.textArea]} placeholder="Açıklama..." multiline numberOfLines={2} value={notes} onChangeText={setNotes} />
+      <TextInput style={[styles.input, styles.textArea]} placeholder="Açıklama..." placeholderTextColor="#6b7280" multiline numberOfLines={2} value={notes} onChangeText={setNotes} />
 
       <Text style={styles.warning}>Stok girişiniz admin onayından sonra işlenecektir.</Text>
 
@@ -409,8 +425,18 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   manuelGirisBtnText: { fontSize: 15, fontWeight: '700', color: '#b8860b', textAlign: 'center' },
+  manuelBarkodsuzBtn: {
+    backgroundColor: '#ecfdf5',
+    borderWidth: 2,
+    borderColor: '#059669',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    marginBottom: 12,
+  },
+  manuelBarkodsuzBtnText: { fontSize: 15, fontWeight: '700', color: '#047857', textAlign: 'center' },
   label: { fontSize: 14, fontWeight: '600', marginBottom: 8, color: '#374151' },
-  input: { borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 10, padding: 12, fontSize: 14, backgroundColor: '#fff' },
+  input: { borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 10, padding: 12, fontSize: 14, backgroundColor: '#fff', color: '#111827' },
   textArea: { minHeight: 72 },
   searchList: { borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 10, marginTop: 8, backgroundColor: '#fff', maxHeight: 280 },
   searchItem: { flexDirection: 'row', justifyContent: 'space-between', padding: 12, borderBottomWidth: 1, borderBottomColor: '#f3f4f6' },

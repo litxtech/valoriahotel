@@ -74,14 +74,24 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const messages: { to: string; title: string; body?: string; sound?: 'default'; channelId?: string; priority?: 'high'; data?: Record<string, unknown> }[] = uniqueTokens.map(
+    const messages: {
+      to: string;
+      title: string;
+      body?: string;
+      channelId?: string;
+      priority?: "high";
+      sound?: "default";
+      interruptionLevel?: "active";
+      data?: Record<string, unknown>;
+    }[] = uniqueTokens.map(
       (to) => ({
         to,
         title,
         body: messageBody ?? undefined,
-        sound: "default",
-        channelId: "default",
+        channelId: "valoria_urgent",
         priority: "high",
+        sound: "default",
+        interruptionLevel: "active" as const,
         data: { ...data, screen: "notifications" },
       })
     );

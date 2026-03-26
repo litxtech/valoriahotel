@@ -2,7 +2,9 @@
  * Ortak medya yükleme yardımcıları.
  * URI veya data URI üzerinden ArrayBuffer'a çevirir. Android content:// ve base64 güvenli.
  * SDK 54+ için readAsStringAsync legacy API kullanılır.
+ * Android content:// için copyAsync ile cache'e kopyalama fallback'i vardır.
  */
+import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import { decode } from 'base64-arraybuffer';
 
@@ -29,16 +31,34 @@ export async function uriToArrayBuffer(uri: string): Promise<ArrayBuffer> {
 
   if (normalized.startsWith('file://') || normalized.startsWith('content://')) {
     const encoding = (FileSystem.EncodingType && (FileSystem.EncodingType as Record<string, string>).Base64) ?? 'base64';
+    let uriToRead = normalized;
+
+    if (Platform.OS === 'android' && normalized.startsWith('content://')) {
+      try {
+        const ext = normalized.includes('.mp4') || normalized.includes('video') ? '.mp4' : '.jpg';
+        const tempPath = `${FileSystem.cacheDirectory}upload_temp_${Date.now()}${ext}`;
+        await FileSystem.copyAsync({ from: normalized, to: tempPath });
+        uriToRead = tempPath;
+      } catch (e) {
+        console.warn('[uploadMedia] content:// copyAsync hatası, doğrudan okumayı deniyoruz:', (e as Error)?.message);
+      }
+    }
+
     try {
-      const base64 = await FileSystem.readAsStringAsync(normalized, {
+      const base64 = await FileSystem.readAsStringAsync(uriToRead, {
         encoding: encoding as 'base64',
       });
+      if (uriToRead !== normalized) {
+        await FileSystem.deleteAsync(uriToRead, { idempotent: true });
+      }
       if (typeof base64 !== 'string' || !base64) {
-        console.warn('[uploadMedia] FileSystem: base64 boş veya geçersiz');
         throw new Error('Dosya okunamadı');
       }
       return decode(base64);
     } catch (e1) {
+      if (uriToRead !== normalized) {
+        try { await FileSystem.deleteAsync(uriToRead, { idempotent: true }); } catch (_) {}
+      }
       console.warn('[uploadMedia] FileSystem.readAsStringAsync hatası:', (e1 as Error)?.message);
       try {
         const response = await fetch(normalized);

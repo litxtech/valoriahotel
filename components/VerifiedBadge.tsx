@@ -18,21 +18,23 @@ type AvatarWithBadgeProps = {
   avatarSize?: number;
   /** Avatar üzerindeki tik boyutu */
   badgeSize?: number;
+  /** Avatar üzerinde tik gösterme (false ise sadece isim yanında tik kullanın) */
+  showBadge?: boolean;
   children: React.ReactNode;
   style?: object;
 };
 
-/** Avatar üzerinde sağ alt köşede mavi/sarı tik (isim yanında + avatar üzerinde her yerde görünsün) */
-export function AvatarWithBadge({ badge, avatarSize = 44, badgeSize = 14, children, style }: AvatarWithBadgeProps) {
-  const hasBadge = badge === 'blue' || badge === 'yellow';
+/** Avatar sarmalayıcı; avatar köşesinde mavi/sarı tik gösterilir (showBadge false ise gösterilmez). */
+export function AvatarWithBadge({ badge, avatarSize = 44, badgeSize, showBadge = true, children, style }: AvatarWithBadgeProps) {
+  const size = badgeSize ?? Math.max(12, Math.round(avatarSize * 0.22));
   return (
     <View style={[styles.avatarWrap, { width: avatarSize, height: avatarSize }, style]}>
       {children}
-      {hasBadge ? (
-        <View style={[styles.avatarBadge, { right: -2, bottom: -2 }]} pointerEvents="none">
-          <Ionicons name="checkmark-circle" size={badgeSize} color={COLORS[badge]} />
+      {showBadge && badge && (badge === 'blue' || badge === 'yellow') && (
+        <View style={[styles.avatarBadge, { right: -2, bottom: -2, width: size, height: size }]} pointerEvents="none">
+          <Ionicons name="checkmark-circle" size={size} color={COLORS[badge]} />
         </View>
-      ) : null}
+      )}
     </View>
   );
 }
@@ -48,7 +50,7 @@ export function VerifiedBadge({ badge, size = BADGE_SIZE, style }: Props) {
   if (!badge || (badge !== 'blue' && badge !== 'yellow')) return null;
   const color = COLORS[badge];
   return (
-    <View style={[styles.wrap, style]} pointerEvents="none">
+    <View style={[styles.wrap, { width: size, height: size }, style]} pointerEvents="none">
       <Ionicons name="checkmark-circle" size={size} color={color} />
     </View>
   );
@@ -59,12 +61,14 @@ type NameWithBadgeProps = {
   badge: VerificationBadgeType;
   textStyle?: object;
   badgeSize?: number;
+  /** Profil sayfalarında isim+badge ortalanır */
+  center?: boolean;
 };
 
-/** İsim + mavi/sarı tik satırı; her yerde tutarlı görünsün diye */
-export function StaffNameWithBadge({ name, badge, textStyle, badgeSize = BADGE_SIZE }: NameWithBadgeProps) {
+/** İsim + mavi/sarı tik satırı; tik isimle tam ortada hizalı. */
+export function StaffNameWithBadge({ name, badge, textStyle, badgeSize = BADGE_SIZE, center }: NameWithBadgeProps) {
   return (
-    <View style={styles.nameRow}>
+    <View style={[styles.nameRow, center && styles.nameRowCentered]}>
       <Text style={textStyle} numberOfLines={1}>{name}</Text>
       <VerifiedBadge badge={badge} size={badgeSize} />
     </View>
@@ -73,19 +77,28 @@ export function StaffNameWithBadge({ name, badge, textStyle, badgeSize = BADGE_S
 
 const styles = StyleSheet.create({
   wrap: {
-    marginLeft: 3,
+    marginLeft: 4,
     justifyContent: 'center',
     alignItems: 'center',
+    alignSelf: 'center',
+    flexShrink: 0,
   },
   nameRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'flex-start',
+    alignContent: 'center',
+    flexWrap: 'nowrap',
   },
+  nameRowCentered: { alignSelf: 'center', justifyContent: 'center' },
   avatarWrap: {
     position: 'relative',
+    overflow: 'visible',
   },
   avatarBadge: {
     position: 'absolute',
     backgroundColor: 'transparent',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 });

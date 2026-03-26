@@ -144,12 +144,17 @@ export default function StaffLayout() {
     <Stack screenOptions={{ headerShown: true, headerStyle: { backgroundColor: '#fff' }, headerTintColor: '#1a1d21' }}>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="stock" options={{ headerShown: false }} />
-      <Stack.Screen name="chat/[id]" options={{ title: 'Sohbet' }} />
+      <Stack.Screen name="chat/[id]" options={{ title: 'Sohbet', headerBackTitle: 'Geri' }} />
+      <Stack.Screen name="new-group" options={{ title: 'Grup oluştur', headerBackTitle: 'Geri' }} />
       <Stack.Screen name="feed/new" options={{ title: 'Yeni paylaşım' }} />
       <Stack.Screen name="expenses" options={{ headerShown: false }} />
-      <Stack.Screen name="profile/[id]" options={{ title: 'Profil', headerStyle: { backgroundColor: '#ffffff' }, headerTintColor: '#1a1d21' }} />
+      <Stack.Screen name="profile/[id]" options={{ headerShown: false }} />
+      <Stack.Screen name="profile/edit" options={{ title: 'Profil bilgilerini düzenle', headerBackTitle: 'Geri' }} />
       <Stack.Screen name="tasks" options={{ title: 'Görevlerim', headerBackTitle: 'Geri' }} />
       <Stack.Screen name="delete-account" options={{ title: 'Hesabımı sil', headerBackTitle: 'Geri' }} />
+      <Stack.Screen name="map" options={{ headerShown: false }} />
+      <Stack.Screen name="cameras" options={{ headerShown: false }} />
+      <Stack.Screen name="guests/[id]" options={{ title: 'Misafir profili', headerShown: false }} />
     </Stack>
   );
 }

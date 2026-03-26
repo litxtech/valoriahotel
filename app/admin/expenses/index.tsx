@@ -14,6 +14,7 @@ import {
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
+import { sendNotification } from '@/lib/notificationService';
 import { useAuthStore } from '@/stores/authStore';
 import { adminTheme } from '@/constants/adminTheme';
 import { AdminCard } from '@/components/admin';
@@ -103,17 +104,30 @@ export default function AdminExpensesScreen() {
     load().finally(() => setRefreshing(false));
   }, [load]);
 
-  const approve = async (id: string) => {
+  const getExpenseSummary = (e: ExpenseRow) =>
+    `${fmtMoney(Number(e.amount))} · ${formatDateShort(e.expense_date)} · ${e.category?.name ?? '—'}`;
+
+  const approve = async (e: ExpenseRow) => {
     if (!me?.id) return;
-    setActingId(id);
+    setActingId(e.id);
     const { error } = await supabase
       .from('staff_expenses')
       .update({ status: 'approved', approved_by: me.id, approved_at: new Date().toISOString(), rejection_reason: null })
-      .eq('id', id);
+      .eq('id', e.id);
     setActingId(null);
     if (error) {
       Alert.alert('Hata', error.message);
       return;
+    }
+    if (e.staff_id) {
+      await sendNotification({
+        staffId: e.staff_id,
+        title: 'Harcama onaylandı',
+        body: `Girdiğiniz harcama onaylandı: ${getExpenseSummary(e)}`,
+        category: 'admin',
+        data: { screen: '/staff/expenses' },
+        createdByStaffId: me.id,
+      });
     }
     load();
   };
@@ -198,7 +212,7 @@ export default function AdminExpensesScreen() {
                     <View style={styles.approveRow}>
                       <TouchableOpacity
                         style={[styles.approveBtn, styles.approveBtnOk]}
-                        onPress={() => approve(e.id)}
+                        onPress={() => approve(e)}
                         disabled={actingId === e.id}
                       >
                         {actingId === e.id ? (

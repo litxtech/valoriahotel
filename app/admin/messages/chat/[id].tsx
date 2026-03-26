@@ -6,6 +6,7 @@ import {
   FlatList,
   TextInput,
   TouchableOpacity,
+  Pressable,
   KeyboardAvoidingView,
   Keyboard,
   Platform,
@@ -13,26 +14,38 @@ import {
   Alert,
   Image,
   Modal,
+  useWindowDimensions,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { useLocalSearchParams, useNavigation } from 'expo-router';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuthStore } from '@/stores/authStore';
 import { uriToArrayBuffer, getMimeAndExt } from '@/lib/uploadMedia';
+import { ensureCameraPermission } from '@/lib/cameraPermission';
+import { ensureMediaLibraryPermission } from '@/lib/mediaLibraryPermission';
 import {
   staffGetMessages,
   staffSendMessage,
   staffMarkConversationRead,
+  staffGetConversationHeader,
+  staffDeleteMessage,
   subscribeToMessages,
-  uploadVoiceMessageForStaff,
+  subscribeToTypingPresence,
   uploadImageMessageForStaff,
 } from '@/lib/messagingApi';
 import { supabase } from '@/lib/supabase';
 import type { Message } from '@/lib/messaging';
 import { MESSAGING_COLORS } from '@/lib/messaging';
-import { useVoiceRecorder } from '@/lib/useVoiceRecorder';
 import { VoiceMessagePlayer } from '@/components/VoiceMessagePlayer';
 import { Ionicons } from '@expo/vector-icons';
 import { CachedImage } from '@/components/CachedImage';
+import {
+  useMessagingBubbleStore,
+  getBubbleColorForSender,
+  getContrastTextColor,
+  BUBBLE_OTHER_DIRECT,
+  BUBBLE_COLOR_OPTIONS,
+} from '@/stores/messagingBubbleStore';
 
 function formatMessageTime(iso: string): string {
   return new Date(iso).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
@@ -52,45 +65,56 @@ function MessageBubble({
   msg,
   isOwn,
   isGroup,
+  onImagePress,
+  onDelete,
+  bubbleColor,
 }: {
   msg: Message;
   isOwn: boolean;
   isGroup: boolean;
+  onImagePress?: (uri: string) => void;
+  onDelete?: (msg: Message) => void;
+  bubbleColor: string;
 }) {
   const voiceUri = msg.message_type === 'voice' ? (msg.media_url || msg.content) : null;
   const isImage = msg.message_type === 'image' && (msg.media_url || msg.media_thumbnail);
-  const initial = (msg.sender_name || '?').charAt(0).toUpperCase();
+  const imageUri = msg.media_url || msg.media_thumbnail || '';
+  const displayName = msg.sender_name?.trim() || (msg.sender_type === 'guest' ? 'Misafir' : null) || '?';
+  const initial = displayName.charAt(0).toUpperCase();
   const timeStr = isGroup ? formatMessageDateAndTime(msg.created_at) : formatMessageTime(msg.created_at);
+  const textColor = getContrastTextColor(bubbleColor);
   return (
-    <View style={[styles.bubbleWrap, isOwn ? styles.bubbleWrapOwn : styles.bubbleWrapOther]}>
+    <Pressable
+      style={[styles.bubbleWrap, isOwn ? styles.bubbleWrapOwn : styles.bubbleWrapOther]}
+      onLongPress={isOwn && onDelete ? () => onDelete(msg) : undefined}
+      delayLongPress={400}
+    >
       {!isOwn && (
         <View style={styles.otherMeta}>
-          {isGroup && (
-            <View style={styles.avatarWrap}>
-              {msg.sender_avatar ? (
-                <CachedImage uri={msg.sender_avatar} style={styles.avatarImg} contentFit="cover" />
-              ) : (
-                <View style={styles.avatarPlaceholder}><Text style={styles.avatarInitial}>{initial}</Text></View>
-              )}
-            </View>
-          )}
+          <View style={styles.avatarWrap}>
+            {msg.sender_avatar ? (
+              <CachedImage uri={msg.sender_avatar} style={styles.avatarImg} contentFit="cover" />
+            ) : (
+              <View style={styles.avatarPlaceholder}><Text style={styles.avatarInitial}>{initial}</Text></View>
+            )}
+          </View>
           <View style={styles.otherContent}>
-            {isGroup && msg.sender_name ? <Text style={styles.senderName}>{msg.sender_name}</Text> : null}
-            <View style={[styles.bubble, styles.bubbleOther]}>
+            {displayName ? <Text style={styles.senderName}>{displayName}</Text> : null}
+            <View style={[styles.bubble, styles.bubbleOther, { backgroundColor: bubbleColor }]}>
               {msg.message_type === 'text' ? (
-                <Text style={[styles.bubbleText, styles.bubbleTextOther]}>{msg.content || ''}</Text>
+                <Text style={[styles.bubbleText, { color: textColor }]}>{msg.content || ''}</Text>
               ) : msg.message_type === 'voice' && voiceUri ? (
                 <VoiceMessagePlayer uri={voiceUri} isOwn={false} />
               ) : isImage ? (
-                <View style={styles.imageWrap}>
-                  <CachedImage uri={msg.media_thumbnail || msg.media_url || ''} style={styles.bubbleImage} contentFit="cover" />
-                </View>
+                <TouchableOpacity style={[styles.imageWrap, styles.imageWrapPlaceholder]} onPress={() => onImagePress?.(imageUri)} activeOpacity={1}>
+                  <CachedImage uri={msg.media_thumbnail || msg.media_url || ''} style={styles.bubbleImage} contentFit="cover" transition={0} />
+                </TouchableOpacity>
               ) : (
-                <Text style={[styles.bubbleText, styles.bubbleTextOther]}>
+                <Text style={[styles.bubbleText, { color: textColor }]}>
                   [{msg.message_type}] {msg.content || msg.media_url || '—'}
                 </Text>
               )}
-              <Text style={[styles.bubbleTime, styles.bubbleTimeOther]}>
+              <Text style={[styles.bubbleTime, { color: textColor, opacity: 0.9 }]}>
                 {timeStr}
               </Text>
             </View>
@@ -98,33 +122,34 @@ function MessageBubble({
         </View>
       )}
       {isOwn && (
-        <View style={[styles.bubble, styles.bubbleOwn]}>
+        <View style={[styles.bubble, styles.bubbleOwn, { backgroundColor: bubbleColor }]}>
           {msg.message_type === 'text' ? (
-            <Text style={[styles.bubbleText, styles.bubbleTextOwn]}>{msg.content || ''}</Text>
+            <Text style={[styles.bubbleText, { color: textColor }]}>{msg.content || ''}</Text>
           ) : msg.message_type === 'voice' && voiceUri ? (
             <VoiceMessagePlayer uri={voiceUri} isOwn={true} />
           ) : isImage ? (
-            <View style={styles.imageWrap}>
-              <CachedImage uri={msg.media_thumbnail || msg.media_url || ''} style={styles.bubbleImage} contentFit="cover" />
-            </View>
+            <TouchableOpacity style={[styles.imageWrap, styles.imageWrapPlaceholder]} onPress={() => onImagePress?.(imageUri)} activeOpacity={1}>
+              <CachedImage uri={msg.media_thumbnail || msg.media_url || ''} style={styles.bubbleImage} contentFit="cover" transition={0} />
+            </TouchableOpacity>
           ) : (
-            <Text style={[styles.bubbleText, styles.bubbleTextOwn]}>
+            <Text style={[styles.bubbleText, { color: textColor }]}>
               [{msg.message_type}] {msg.content || msg.media_url || '—'}
             </Text>
           )}
-          <Text style={[styles.bubbleTime, styles.bubbleTimeOwn]}>
+          <Text style={[styles.bubbleTime, { color: textColor, opacity: 0.9 }]}>
             {timeStr}
             {msg.is_read ? ' ✓✓' : ' ✓'}
           </Text>
         </View>
       )}
-    </View>
+    </Pressable>
   );
 }
 
 export default function AdminChatScreen() {
   const { id: conversationId } = useLocalSearchParams<{ id: string }>();
   const { staff } = useAuthStore();
+  const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([]);
   const [conversationType, setConversationType] = useState<string>('direct');
   const [conversationName, setConversationName] = useState<string>('');
@@ -133,14 +158,23 @@ export default function AdminChatScreen() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const insets = useSafeAreaInsets();
   const [showGroupSettings, setShowGroupSettings] = useState(false);
   const [editGroupName, setEditGroupName] = useState('');
   const [editGroupAvatar, setEditGroupAvatar] = useState<string | null>(null);
   const [savingGroup, setSavingGroup] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [fullscreenImageUri, setFullscreenImageUri] = useState<string | null>(null);
+  const [showBubbleColorModal, setShowBubbleColorModal] = useState(false);
   const listRef = useRef<FlatList>(null);
   const subscriptionRef = useRef<ReturnType<typeof subscribeToMessages> | null>(null);
-  const voice = useVoiceRecorder();
+  const typingPresenceRef = useRef<ReturnType<typeof subscribeToTypingPresence> | null>(null);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [typingNames, setTypingNames] = useState<string[]>([]);
+  const { width: winWidth, height: winHeight } = useWindowDimensions();
+  const { myBubbleColor, setMyBubbleColor, loadStored: loadBubbleStore } = useMessagingBubbleStore();
+  const inputRowExtra = Platform.OS === 'android' ? -20 : 56;
+  const androidKbPadding = Platform.OS === 'android' && keyboardHeight > 0 ? keyboardHeight + inputRowExtra + insets.bottom : 0;
 
   const isAdmin = staff?.role === 'admin';
   const isGroup = conversationType === 'group';
@@ -148,69 +182,117 @@ export default function AdminChatScreen() {
 
   const navigation = useNavigation();
   useEffect(() => {
+    loadBubbleStore();
+  }, []);
+  useEffect(() => {
     if (!conversationId) return;
     supabase
       .from('conversations')
       .select('type, name, avatar')
       .eq('id', conversationId)
       .single()
-      .then(({ data }) => {
+      .then(async ({ data }) => {
         const row = data as { type: string; name: string | null; avatar: string | null } | null;
         setConversationType(row?.type ?? 'direct');
-        const name = row?.name ?? 'Sohbet';
-        const avatar = row?.avatar ?? null;
-        setConversationName(name);
-        setConversationAvatar(avatar);
-        navigation.setOptions({ title: name });
+        if (staff?.id) {
+          const header = await staffGetConversationHeader(conversationId, staff.id);
+          setConversationName(header.name);
+          setConversationAvatar(header.avatar);
+        } else {
+          setConversationName(row?.name ?? 'Sohbet');
+          setConversationAvatar(row?.avatar ?? null);
+        }
       });
-  }, [conversationId, navigation]);
+  }, [conversationId, staff?.id]);
 
   useEffect(() => {
-    if (!canEditGroup) return;
     navigation.setOptions({
+      headerTitle: () => (
+        <View style={styles.headerTitleRow}>
+          {conversationAvatar ? (
+            <CachedImage uri={conversationAvatar} style={styles.headerAvatar} contentFit="cover" />
+          ) : (
+            <View style={styles.headerAvatarPlaceholder}>
+              <Text style={styles.headerAvatarInitial}>{(conversationName || '?').charAt(0).toUpperCase()}</Text>
+            </View>
+          )}
+          <Text style={styles.headerTitleText} numberOfLines={1}>{conversationName || 'Sohbet'}</Text>
+        </View>
+      ),
       headerRight: () => (
-        <TouchableOpacity
-          onPress={() => {
-            setEditGroupName(conversationName);
-            setEditGroupAvatar(conversationAvatar);
-            setShowGroupSettings(true);
-          }}
-          style={{ padding: 8, marginRight: 4 }}
-          accessibilityLabel="Grup ayarları"
-        >
-          <Text style={{ color: MESSAGING_COLORS.primary, fontWeight: '600', fontSize: 15 }}>Ayarlar</Text>
+        <TouchableOpacity onPress={() => setShowBubbleColorModal(true)} style={{ padding: 8, marginRight: 8 }} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+          <Ionicons name="color-palette-outline" size={24} color={MESSAGING_COLORS.primary} />
         </TouchableOpacity>
       ),
     });
-    return () => navigation.setOptions({ headerRight: undefined });
-  }, [canEditGroup, conversationName, conversationAvatar, navigation]);
+  }, [navigation, conversationName, conversationAvatar]);
 
+  const openGroupSettings = () => {
+    setEditGroupName(conversationName);
+    setEditGroupAvatar(conversationAvatar);
+    setShowGroupSettings(true);
+  };
+
+  const scrollTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   useEffect(() => {
     if (!staff || !conversationId) {
       setLoading(false);
       return;
     }
+    scrollTimeoutsRef.current = [];
     (async () => {
-      const list = await staffGetMessages(conversationId);
+      const list = await staffGetMessages(conversationId, 50, undefined, staff.id);
       setMessages(list);
       staffMarkConversationRead(conversationId, staff.id);
       setLoading(false);
+      const scrollToEnd = () => listRef.current?.scrollToEnd({ animated: true });
+      const hasImage = list.some((m: Message) => m.message_type === 'image');
+      if (Platform.OS === 'android') {
+        scrollToEnd();
+        scrollTimeoutsRef.current.push(setTimeout(scrollToEnd, 150), setTimeout(scrollToEnd, 450));
+        if (hasImage) scrollTimeoutsRef.current.push(setTimeout(scrollToEnd, 750));
+      } else {
+        scrollTimeoutsRef.current.push(setTimeout(scrollToEnd, 100));
+      }
     })();
+    return () => scrollTimeoutsRef.current.forEach((t) => clearTimeout(t));
   }, [staff?.id, conversationId]);
 
   useEffect(() => {
     if (!conversationId) return;
-    subscriptionRef.current = subscribeToMessages(conversationId, (newMsg) => {
-      setMessages((prev) => {
-        if (prev.some((m) => m.id === newMsg.id)) return prev;
-        return [...prev, newMsg];
-      });
-      setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
-    });
+    subscriptionRef.current = subscribeToMessages(
+      conversationId,
+      (newMsg) => {
+        setMessages((prev) => {
+          const withoutTemp = prev.filter((m) => !String(m.id).startsWith('temp-'));
+          if (withoutTemp.some((m) => m.id === newMsg.id)) return prev;
+          return [...withoutTemp, newMsg];
+        });
+        setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
+      },
+      {
+        onMessageDeleted: (messageId) => {
+          setMessages((prev) => prev.filter((m) => m.id !== messageId));
+        },
+      }
+    );
     return () => {
       subscriptionRef.current?.unsubscribe?.();
     };
   }, [conversationId]);
+
+  useEffect(() => {
+    if (!conversationId || !staff) return;
+    typingPresenceRef.current = subscribeToTypingPresence(
+      conversationId,
+      { displayName: staff.full_name || staff.email || 'Admin', userId: staff.id },
+      setTypingNames
+    );
+    return () => {
+      typingPresenceRef.current?.unsubscribe?.();
+      typingPresenceRef.current = null;
+    };
+  }, [conversationId, staff?.id, staff?.full_name, staff?.email]);
 
   useEffect(() => {
     if (Platform.OS !== 'android') return;
@@ -227,7 +309,37 @@ export default function AdminChatScreen() {
     if (!text || !staff || !conversationId || sending) return;
     setSending(true);
     setInput('');
-    const { data: sent, error } = await staffSendMessage(
+    typingPresenceRef.current?.updateTyping(false);
+    const tempId = `temp-${Date.now()}`;
+    const optimistic: Message = {
+      id: tempId,
+      conversation_id: conversationId,
+      sender_id: staff.id,
+      sender_type: 'admin',
+      sender_name: staff.full_name || staff.email,
+      sender_avatar: staff.profile_image ?? null,
+      message_type: 'text',
+      content: text,
+      media_url: null,
+      media_thumbnail: null,
+      file_name: null,
+      file_size: null,
+      mime_type: null,
+      is_delivered: false,
+      delivered_at: null,
+      is_read: false,
+      read_at: null,
+      is_edited: false,
+      edited_at: null,
+      is_deleted: false,
+      deleted_at: null,
+      reply_to_id: null,
+      scheduled_at: null,
+      created_at: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, optimistic]);
+    setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 50);
+    const { data: sent, error, conversationId: nextConversationId } = await staffSendMessage(
       conversationId,
       staff.id,
       staff.full_name || staff.email,
@@ -237,53 +349,24 @@ export default function AdminChatScreen() {
     setSending(false);
     if (error) {
       setInput(text);
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
       Alert.alert('Mesaj gönderilemedi', error);
       return;
     }
     if (sent) {
-      const list = await staffGetMessages(conversationId);
-      setMessages(list);
-      listRef.current?.scrollToEnd({ animated: true });
-    }
-  };
-
-  const startVoice = async () => {
-    const err = await voice.startRecording();
-    if (err) Alert.alert('Ses kaydı', err);
-  };
-
-  const sendVoice = async () => {
-    const uri = await voice.stopRecording();
-    voice.reset();
-    if (!uri || !staff || !conversationId || sending) return;
-    if (voice.durationSec < 1) {
-      Alert.alert('Çok kısa', 'En az 1 saniye kayıt yapın.');
-      return;
-    }
-    setSending(true);
-    const mediaUrl = await uploadVoiceMessageForStaff(uri);
-    if (!mediaUrl) {
-      setSending(false);
-      Alert.alert('Hata', 'Ses yüklenemedi. Tekrar deneyin.');
-      return;
-    }
-    const { data: sent, error } = await staffSendMessage(
-      conversationId,
-      staff.id,
-      staff.full_name || staff.email,
-      staff.profile_image ?? null,
-      'Sesli mesaj',
-      'voice',
-      mediaUrl
-    );
-    setSending(false);
-    if (error) {
-      Alert.alert('Mesaj gönderilemedi', error);
-      return;
-    }
-    if (sent) {
-      const list = await staffGetMessages(conversationId);
-      setMessages(list);
+      const convId = nextConversationId ?? conversationId;
+      const { notifyConversationRecipients } = await import('@/lib/notificationService');
+      notifyConversationRecipients({
+        conversationId: convId,
+        excludeStaffId: staff.id,
+        title: 'Yeni mesaj',
+        body: text.slice(0, 80) + (text.length > 80 ? '…' : ''),
+        data: { conversationId: convId, url: `/admin/messages/chat/${convId}` },
+      }).catch(() => {});
+      if (nextConversationId !== conversationId) {
+        router.replace({ pathname: '/admin/messages/chat/[id]', params: { id: nextConversationId } });
+        return;
+      }
       listRef.current?.scrollToEnd({ animated: true });
     }
   };
@@ -291,15 +374,19 @@ export default function AdminChatScreen() {
   const sendImageFromSource = async (source: 'camera' | 'library') => {
     if (!staff || !conversationId || sending) return;
     if (source === 'camera') {
-      const { status } = await ImagePicker.requestCameraPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('İzin', 'Kamera erişimi gerekli.');
-        return;
-      }
+      const granted = await ensureCameraPermission({
+        title: 'Kamera izni',
+        message: 'Sohbette fotoğraf çekmek için kamera erişimi gerekiyor.',
+        settingsMessage: 'Kamera izni kapalı. Sohbete fotoğraf eklemek için ayarlardan izin verin.',
+      });
+      if (!granted) return;
     } else {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('İzin', 'Galeri erişimi gerekli.');
+      const granted = await ensureMediaLibraryPermission({
+        title: 'Galeri izni',
+        message: 'Sohbette fotograf secmek icin galeri erisimi istiyoruz.',
+        settingsMessage: 'Galeri izni kapali. Sohbete fotograf eklemek icin ayarlardan izin verin.',
+      });
+      if (!granted) {
         return;
       }
     }
@@ -316,13 +403,8 @@ export default function AdminChatScreen() {
       const { mime } = getMimeAndExt(uri, 'image');
       console.log('[AdminChat] mime:', mime);
       const mediaUrl = await uploadImageMessageForStaff(arrayBuffer, mime);
-      if (!mediaUrl) {
-        console.warn('[AdminChat] uploadImageMessageForStaff null döndü');
-        Alert.alert('Hata', 'Resim yüklenemedi.');
-        return;
-      }
       console.log('[AdminChat] mediaUrl alındı:', mediaUrl?.slice?.(0, 60));
-      const { data: sent, error } = await staffSendMessage(
+      const { data: sent, error, conversationId: nextConversationId } = await staffSendMessage(
         conversationId,
         staff.id,
         staff.full_name || staff.email,
@@ -336,7 +418,20 @@ export default function AdminChatScreen() {
         return;
       }
       if (sent) {
-        const list = await staffGetMessages(conversationId);
+        const convId = nextConversationId ?? conversationId;
+        const { notifyConversationRecipients } = await import('@/lib/notificationService');
+        notifyConversationRecipients({
+          conversationId: convId,
+          excludeStaffId: staff.id,
+          title: 'Yeni mesaj',
+          body: 'Fotoğraf gönderildi.',
+          data: { conversationId: convId, url: `/admin/messages/chat/${convId}` },
+        }).catch(() => {});
+        if (nextConversationId !== conversationId) {
+          router.replace({ pathname: '/admin/messages/chat/[id]', params: { id: nextConversationId } });
+          return;
+        }
+        const list = await staffGetMessages(nextConversationId, 50, undefined, staff.id);
         setMessages(list);
         listRef.current?.scrollToEnd({ animated: true });
       }
@@ -361,6 +456,25 @@ export default function AdminChatScreen() {
     );
   };
 
+  const handleDeleteMessage = (msg: Message) => {
+    if (!conversationId) return;
+    Alert.alert('Mesajı sil', 'Bu mesajı silmek istediğinize emin misiniz?', [
+      { text: 'İptal', style: 'cancel' },
+      {
+        text: 'Sil',
+        style: 'destructive',
+        onPress: async () => {
+          const { error } = await staffDeleteMessage(conversationId, msg.id);
+          if (error) {
+            Alert.alert('Hata', error);
+            return;
+          }
+          setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+        },
+      },
+    ]);
+  };
+
   const uploadGroupAvatar = async (uri: string): Promise<string> => {
     const arrayBuffer = await uriToArrayBuffer(uri);
     const ext = uri.toLowerCase().includes('.png') ? 'png' : 'jpg';
@@ -376,9 +490,12 @@ export default function AdminChatScreen() {
   };
 
   const pickAvatarForGroup = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('İzin', 'Galeri erişimi gerekli.');
+    const granted = await ensureMediaLibraryPermission({
+      title: 'Galeri izni',
+      message: 'Grup avatari secmek icin galeri erisimi istiyoruz.',
+      settingsMessage: 'Galeri izni kapali. Grup avatari secmek icin ayarlardan izin verin.',
+    });
+    if (!granted) {
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -433,10 +550,7 @@ export default function AdminChatScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={[
-        styles.container,
-        Platform.OS === 'android' && keyboardHeight > 0 && { paddingBottom: keyboardHeight },
-      ]}
+      style={[styles.container, androidKbPadding > 0 && { paddingBottom: androidKbPadding }]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
@@ -446,55 +560,87 @@ export default function AdminChatScreen() {
         data={messages}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
-        renderItem={({ item }) => (
-          <MessageBubble
-            msg={item}
-            isOwn={item.sender_id === staff?.id}
-            isGroup={conversationType === 'group'}
-          />
-        )}
+        ListHeaderComponent={
+          canEditGroup ? (
+            <TouchableOpacity
+              style={styles.groupSettingsBar}
+              onPress={openGroupSettings}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="settings-outline" size={20} color={MESSAGING_COLORS.primary} />
+              <Text style={styles.groupSettingsBarText}>Grup adı ve avatarı düzenle</Text>
+              <Ionicons name="chevron-forward" size={18} color={MESSAGING_COLORS.textSecondary} />
+            </TouchableOpacity>
+          ) : null
+        }
+        renderItem={({ item }) => {
+          const isOwn = item.sender_id === staff?.id;
+          const bubbleColor = isOwn
+            ? myBubbleColor
+            : (conversationType === 'group' ? getBubbleColorForSender(item.sender_id) : BUBBLE_OTHER_DIRECT);
+          return (
+            <MessageBubble
+              msg={item}
+              isOwn={isOwn}
+              isGroup={conversationType === 'group'}
+              onImagePress={setFullscreenImageUri}
+              onDelete={handleDeleteMessage}
+              bubbleColor={bubbleColor}
+            />
+          );
+        }}
         ListEmptyComponent={<Text style={styles.empty}>Henüz mesaj yok.</Text>}
+        onContentSizeChange={() => { if (messages.length > 0) listRef.current?.scrollToEnd({ animated: false }); }}
+        onLayout={Platform.OS === 'android' ? () => { if (messages.length > 0) requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: false })); } : undefined}
       />
-      {voice.state === 'recording' && (
-        <View style={styles.voiceBar}>
-          <Text style={styles.voiceBarText}>🔴 {voice.durationSec} sn</Text>
-          <TouchableOpacity style={styles.voiceCancelBtn} onPress={voice.cancelRecording}>
-            <Text style={styles.voiceCancelText}>İptal</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.voiceSendBtn} onPress={sendVoice} disabled={sending}>
-            {sending ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.voiceSendText}>Gönder</Text>}
-          </TouchableOpacity>
+      {typingNames.length > 0 ? (
+        <View style={styles.typingRow}>
+          {typingNames.length === 1 ? (
+            <Text style={styles.typingText} numberOfLines={1}>{typingNames[0]} yazıyor...</Text>
+          ) : (
+            <View style={styles.typingMultiRow}>
+              {typingNames.slice(0, 4).map((name) => (
+                <View key={name} style={styles.typingChip}>
+                  <Text style={styles.typingChipLetter}>{name.charAt(0).toUpperCase()}</Text>
+                </View>
+              ))}
+              <Text style={styles.typingTextSmall}> yazıyor...</Text>
+            </View>
+          )}
         </View>
-      )}
+      ) : null}
       <View style={styles.inputRow}>
         <TextInput
           style={styles.input}
           placeholder="Mesaj yaz..."
           placeholderTextColor={MESSAGING_COLORS.textSecondary}
           value={input}
-          onChangeText={setInput}
+          onChangeText={(t) => {
+            setInput(t);
+            typingPresenceRef.current?.updateTyping(true);
+            if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+            typingTimeoutRef.current = setTimeout(() => {
+              typingPresenceRef.current?.updateTyping(false);
+              typingTimeoutRef.current = null;
+            }, 3000);
+          }}
           multiline
           maxLength={2000}
           onSubmitEditing={send}
         />
         <TouchableOpacity style={styles.mediaBtn} onPress={showImageOptions} disabled={sending} activeOpacity={0.7}>
-          <Ionicons name="camera-outline" size={22} color={MESSAGING_COLORS.primary} />
+          <Ionicons name="camera-outline" size={18} color={MESSAGING_COLORS.textSecondary} />
         </TouchableOpacity>
         <TouchableOpacity style={styles.mediaBtn} onPress={() => sendImageFromSource('library')} disabled={sending} activeOpacity={0.7}>
-          <Ionicons name="images-outline" size={22} color={MESSAGING_COLORS.primary} />
+          <Ionicons name="images-outline" size={18} color={MESSAGING_COLORS.textSecondary} />
         </TouchableOpacity>
-        {voice.state === 'idle' || voice.state === 'error' ? (
-          <TouchableOpacity style={styles.micBtn} onPress={startVoice}>
-            <Text style={styles.micBtnText}>🎤</Text>
-          </TouchableOpacity>
-        ) : null}
         <TouchableOpacity
           style={[styles.sendBtn, (!input.trim() || sending) && styles.sendBtnDisabled]}
           onPress={send}
           disabled={!input.trim() || sending}
           activeOpacity={0.85}
         >
-          {sending && voice.state !== 'recording' ? (
+          {sending ? (
             <ActivityIndicator size="small" color="#fff" />
           ) : (
             <Ionicons name="send" size={20} color="#fff" />
@@ -558,6 +704,46 @@ export default function AdminChatScreen() {
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
+
+      <Modal visible={showBubbleColorModal} transparent animationType="fade">
+        <TouchableOpacity activeOpacity={1} style={styles.modalOverlay} onPress={() => setShowBubbleColorModal(false)}>
+          <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()} style={styles.modalBox}>
+            <Text style={styles.modalTitle}>Mesaj balon renginiz</Text>
+            <View style={styles.bubbleColorRow}>
+              {BUBBLE_COLOR_OPTIONS.map((c) => (
+                <TouchableOpacity
+                  key={c}
+                  style={[
+                    styles.bubbleColorChip,
+                    { backgroundColor: c },
+                    myBubbleColor === c && styles.bubbleColorChipSelected,
+                  ]}
+                  onPress={() => {
+                    setMyBubbleColor(c);
+                    setShowBubbleColorModal(false);
+                  }}
+                />
+              ))}
+            </View>
+            <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setShowBubbleColorModal(false)}>
+              <Text style={styles.modalCancelText}>Kapat</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      <Modal visible={!!fullscreenImageUri} transparent animationType="fade">
+        <TouchableOpacity activeOpacity={1} style={styles.imageModalOverlay} onPress={() => setFullscreenImageUri(null)}>
+          <TouchableOpacity activeOpacity={1} style={[styles.imageModalContent, { maxWidth: winWidth, maxHeight: winHeight }]} onPress={() => {}}>
+            {fullscreenImageUri ? (
+              <CachedImage uri={fullscreenImageUri} style={[styles.imageModalImage, { width: winWidth, height: winHeight }]} contentFit="contain" />
+            ) : null}
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.imageModalCloseBtn} onPress={() => setFullscreenImageUri(null)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+            <Ionicons name="close" size={28} color="#fff" />
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -566,6 +752,24 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f9fafb' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   listContent: { padding: 12, paddingBottom: 16 },
+  groupSettingsBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 12,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  groupSettingsBarText: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '600',
+    color: MESSAGING_COLORS.primary,
+  },
   bubbleWrap: { marginBottom: 12 },
   bubbleWrapOwn: { alignItems: 'flex-end' },
   bubbleWrapOther: { alignItems: 'flex-start' },
@@ -597,9 +801,52 @@ const styles = StyleSheet.create({
   bubbleTime: { fontSize: 11, marginTop: 4 },
   bubbleTimeOwn: { color: 'rgba(255,255,255,0.85)' },
   bubbleTimeOther: { color: MESSAGING_COLORS.textSecondary },
-  imageWrap: { marginTop: 2 },
+  imageWrap: { marginTop: 2, width: 200, height: 200, borderRadius: 12, overflow: 'hidden' },
+  imageWrapPlaceholder: { backgroundColor: '#e5e7eb' },
   bubbleImage: { width: 200, height: 200, borderRadius: 12 },
+  imageModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  imageModalContent: { justifyContent: 'center', alignItems: 'center' },
+  imageModalImage: { maxWidth: '100%', maxHeight: '100%' },
+  imageModalCloseBtn: {
+    position: 'absolute',
+    top: 48,
+    right: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  headerTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    maxWidth: 220,
+  },
+  headerAvatar: { width: 32, height: 32, borderRadius: 16 },
+  headerAvatarPlaceholder: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: MESSAGING_COLORS.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  headerAvatarInitial: { color: '#fff', fontSize: 14, fontWeight: '700' },
+  headerTitleText: { fontSize: 17, fontWeight: '700', color: MESSAGING_COLORS.text, flex: 1 },
   empty: { textAlign: 'center', color: MESSAGING_COLORS.textSecondary, marginTop: 24 },
+  typingRow: { paddingHorizontal: 12, paddingVertical: 4, paddingBottom: 2, minHeight: 22, backgroundColor: '#fff' },
+  typingText: { fontSize: 12, color: MESSAGING_COLORS.textSecondary },
+  typingMultiRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 4 },
+  typingChip: { width: 20, height: 20, borderRadius: 10, backgroundColor: MESSAGING_COLORS.primary, justifyContent: 'center', alignItems: 'center' },
+  typingChipLetter: { fontSize: 11, fontWeight: '700', color: '#fff' },
+  typingTextSmall: { fontSize: 11, color: MESSAGING_COLORS.textSecondary },
   inputRow: {
     flexDirection: 'row',
     alignItems: 'flex-end',
@@ -619,6 +866,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     maxHeight: 100,
     marginRight: 8,
+    color: '#1F2937',
   },
   sendBtn: {
     backgroundColor: MESSAGING_COLORS.primary,
@@ -631,46 +879,14 @@ const styles = StyleSheet.create({
   sendBtnDisabled: { opacity: 0.5 },
   sendBtnText: { color: '#fff', fontWeight: '600', fontSize: 15 },
   mediaBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(197, 160, 89, 0.12)',
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#f0f0f0',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 6,
-    borderWidth: 1,
-    borderColor: 'rgba(197, 160, 89, 0.25)',
+    marginRight: 4,
   },
-  micBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#e5e7eb',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 6,
-  },
-  micBtnText: { fontSize: 20 },
-  voiceBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: '#fff3e0',
-    borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
-    gap: 12,
-  },
-  voiceBarText: { fontSize: 14, color: '#1a202c' },
-  voiceCancelBtn: { paddingHorizontal: 12, paddingVertical: 6 },
-  voiceCancelText: { color: MESSAGING_COLORS.textSecondary, fontWeight: '600' },
-  voiceSendBtn: {
-    backgroundColor: MESSAGING_COLORS.primary,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 16,
-  },
-  voiceSendText: { color: '#fff', fontWeight: '600' },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -686,6 +902,9 @@ const styles = StyleSheet.create({
     maxWidth: 340,
   },
   modalTitle: { fontSize: 18, fontWeight: '700', color: MESSAGING_COLORS.text, marginBottom: 20 },
+  bubbleColorRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 20 },
+  bubbleColorChip: { width: 44, height: 44, borderRadius: 22, borderWidth: 2, borderColor: 'transparent' },
+  bubbleColorChipSelected: { borderColor: '#1a365d' },
   modalAvatarRow: { alignItems: 'center', marginBottom: 20 },
   modalAvatarTouch: { width: 80, height: 80, borderRadius: 40, overflow: 'hidden', alignSelf: 'center' },
   modalAvatarImg: { width: 80, height: 80 },

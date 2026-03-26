@@ -66,6 +66,7 @@ export default function NewChatScreen() {
         .from('staff')
         .select('id, full_name, department, profile_image, is_online, role, verification_badge')
         .eq('is_active', true)
+        .is('deleted_at', null)
         .order('full_name');
       setStaff((directData ?? []) as StaffRow[]);
       setLoading(false);
@@ -120,7 +121,7 @@ export default function NewChatScreen() {
             disabled={!!startingId}
             activeOpacity={0.7}
           >
-            <AvatarWithBadge badge={item.verification_badge ?? null} avatarSize={56} badgeSize={12}>
+            <AvatarWithBadge badge={item.verification_badge ?? null} avatarSize={56} badgeSize={12} showBadge={false}>
               <CachedImage uri={item.profile_image || 'https://via.placeholder.com/56'} style={styles.avatar} contentFit="cover" />
             </AvatarWithBadge>
             <View style={styles.rowBody}>

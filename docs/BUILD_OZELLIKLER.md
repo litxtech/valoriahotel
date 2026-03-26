@@ -13,7 +13,7 @@ Build aldığınızda (**development build** veya **EAS Build**) aşağıdaki ö
 | **expo-location** | Konum, geofence | Plugin + izinler var. |
 | **expo-apple-authentication** | Apple ile giriş | Plugin var (sadece iOS). |
 | **expo-splash-screen** | Açılış ekranı | Plugin var. |
-| **expo-local-authentication** | Face ID / parmak izi | İzinler var (NSFaceIDUsageDescription, USE_BIOMETRIC). |
+| **expo-local-authentication** | Biyometrik (parmak izi / Touch ID) | İzinler var (Touch/biometrik prompt). |
 | **expo-image-picker** | Galeri / kamera | NSCameraUsageDescription, NSPhotoLibraryUsageDescription var. |
 | **expo-file-system** | Dosya okuma/yazma | Ekstra plugin gerekmez. |
 | **expo-print** | Yazdırma | Ekstra plugin gerekmez. |

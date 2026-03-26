@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Valoria Sozlesme</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        color: #0f172a;
+        margin: 28px;
+      }
+      .header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 2px solid #1a365d;
+        padding-bottom: 10px;
+        margin-bottom: 20px;
+      }
+      .logo {
+        font-size: 20px;
+        font-weight: 700;
+        color: #1a365d;
+      }
+      .meta {
+        font-size: 12px;
+        color: #475569;
+        text-align: right;
+      }
+      .section-title {
+        font-size: 15px;
+        font-weight: 700;
+        margin-top: 16px;
+        margin-bottom: 8px;
+      }
+      .card {
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        padding: 12px;
+        margin-bottom: 12px;
+        background: #f8fafc;
+      }
+      .line {
+        margin-bottom: 4px;
+        font-size: 13px;
+      }
+      .contract {
+        white-space: pre-wrap;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .signature {
+        margin-top: 26px;
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+      }
+      .sign-box {
+        flex: 1;
+        border-top: 1px solid #0f172a;
+        padding-top: 8px;
+        font-size: 12px;
+        min-height: 80px;
+      }
+      .foot {
+        margin-top: 24px;
+        font-size: 11px;
+        color: #334155;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <div class="logo">VALORIA HOTEL</div>
+      <div class="meta">
+        Oda: {{room_number}}<br />
+        Dil: {{contract_lang}}<br />
+        Onay: {{accepted_at}}
+      </div>
+    </div>
+
+    <div class="section-title">Misafir Bilgileri</div>
+    <div class="card">
+      <div class="line"><strong>Ad Soyad:</strong> {{guest_name}}</div>
+      <div class="line"><strong>Oda Numarasi:</strong> {{room_number}}</div>
+      <div class="line"><strong>Onay Tarihi:</strong> {{accepted_at}}</div>
+    </div>
+
+    <div class="section-title">Sozlesme Metni</div>
+    <div class="card contract">{{contract_content}}</div>
+
+    <div class="signature">
+      <div class="sign-box">Misafir Imza</div>
+      <div class="sign-box">Yetkili Imza</div>
+    </div>
+
+    <div class="foot">
+      T.C. Hazine ve Maliye Bakanligi duzenlemeleri kapsaminda kayit altina alinmistir.
+    </div>
+  </body>
+</html>

@@ -10,24 +10,36 @@ import {
   ActivityIndicator,
   Alert,
 } from 'react-native';
-import { useRouter, Stack } from 'expo-router';
+import { useRouter, Stack, useLocalSearchParams } from 'expo-router';
+import { useTranslation } from 'react-i18next';
 import * as ImagePicker from 'expo-image-picker';
+import { Video, ResizeMode } from 'expo-av';
 import { useAuthStore } from '@/stores/authStore';
 import { supabase } from '@/lib/supabase';
 import { uriToArrayBuffer } from '@/lib/uploadMedia';
 import { getOrCreateGuestForCaller, getOrCreateGuestForCurrentSession } from '@/lib/getOrCreateGuestForCaller';
+import { ensureCameraPermission } from '@/lib/cameraPermission';
+import { ensureMediaLibraryPermission } from '@/lib/mediaLibraryPermission';
 import { theme } from '@/constants/theme';
 import { CachedImage } from '@/components/CachedImage';
+import { POST_TAGS, type PostTagValue } from '@/lib/feedPostTags';
 
 const BUCKET = 'feed-media';
 
 export default function CustomerNewFeedPostScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ lat?: string; lng?: string }>();
+  const { t } = useTranslation();
   const { user } = useAuthStore();
+  const locationFromMap =
+    params.lat != null && params.lng != null && !Number.isNaN(Number(params.lat)) && !Number.isNaN(Number(params.lng))
+      ? { lat: Number(params.lat), lng: Number(params.lng) }
+      : null;
   const [guestId, setGuestId] = useState<string | null>(null);
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [mediaType, setMediaType] = useState<'image' | 'video'>('image');
   const [title, setTitle] = useState('');
+  const [postTag, setPostTag] = useState<PostTagValue>(null);
   const [uploading, setUploading] = useState(false);
   const [loadingGuest, setLoadingGuest] = useState(true);
   const [goingBack, setGoingBack] = useState(false);
@@ -79,9 +91,12 @@ export default function CustomerNewFeedPostScreen() {
   }, [user?.id]);
 
   const pickImage = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('İzin', 'Galeri erişimi gerekli.');
+    const granted = await ensureMediaLibraryPermission({
+      title: 'Galeri izni',
+      message: 'Paylasim icin galeriden foto/video secmek amaciyla izin istiyoruz.',
+      settingsMessage: 'Galeri izni kapali. Paylasim icin ayarlardan galeri iznini acin.',
+    });
+    if (!granted) {
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -102,11 +117,12 @@ export default function CustomerNewFeedPostScreen() {
   };
 
   const takePhoto = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('İzin', 'Kamera erişimi gerekli.');
-      return;
-    }
+    const granted = await ensureCameraPermission({
+      title: 'Kamera izni',
+      message: 'Paylaşım için fotoğraf çekmek amacıyla kamera erişimi istiyoruz.',
+      settingsMessage: 'Kamera izni kapalı. Paylaşım için ayarlardan kamera iznini açın.',
+    });
+    if (!granted) return;
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.All,
       allowsEditing: false,
@@ -168,7 +184,7 @@ export default function CustomerNewFeedPostScreen() {
         thumbnailUrl = mediaType === 'image' ? mediaUrl : null;
       }
 
-      const { error: insertErr } = await supabase.from('feed_posts').insert({
+      const insertPayload: Record<string, unknown> = {
         staff_id: null,
         guest_id: guestId,
         media_type: finalMediaType,
@@ -176,7 +192,26 @@ export default function CustomerNewFeedPostScreen() {
         thumbnail_url: thumbnailUrl,
         title: (title ?? '').trim() || null,
         visibility: 'customers',
-      });
+        post_tag: postTag || null,
+      };
+      if (locationFromMap) {
+        insertPayload.lat = locationFromMap.lat;
+        insertPayload.lng = locationFromMap.lng;
+        try {
+          const { Location } = await import('expo-location');
+          const [rev] = await Location.reverseGeocodeAsync({
+            latitude: locationFromMap.lat,
+            longitude: locationFromMap.lng,
+          }).catch(() => []);
+          if (rev) {
+            const parts = [rev.street, rev.city, rev.region].filter(Boolean);
+            if (parts.length) insertPayload.location_label = parts.join(', ');
+          }
+        } catch {
+          /* reverse geocode optional */
+        }
+      }
+      const { error: insertErr } = await supabase.from('feed_posts').insert(insertPayload);
       if (insertErr) {
         setUploading(false);
         Alert.alert('Hata', insertErr.message);
@@ -231,6 +266,27 @@ export default function CustomerNewFeedPostScreen() {
     <>
       <Stack.Screen options={{ title: 'Yeni paylaşım', headerStyle: { backgroundColor: theme.colors.surface }, headerTintColor: theme.colors.text }} />
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+        <View style={styles.shareNoticeBox}>
+          <Text style={styles.shareNoticeText}>{t('feedShareNotice')}</Text>
+          {locationFromMap && (
+            <View style={styles.locationBadge}>
+              <Text style={styles.locationBadgeText}>📍 Haritadan paylaşım — konum eklenecek</Text>
+            </View>
+          )}
+        </View>
+        <Text style={styles.label}>Etiket (isteğe bağlı)</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tagsRow} contentContainerStyle={styles.tagsRowContent}>
+          {POST_TAGS.map((tag) => (
+            <TouchableOpacity
+              key={tag.value}
+              style={[styles.tagChip, postTag === tag.value && styles.tagChipActive]}
+              onPress={() => setPostTag(postTag === tag.value ? null : tag.value)}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.tagChipText, postTag === tag.value && styles.tagChipTextActive]}>{tag.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
         <Text style={styles.label}>Metin (sadece metinle de paylaşabilirsiniz)</Text>
         <TextInput
           style={[styles.input, styles.inputMultiline]}
@@ -258,9 +314,14 @@ export default function CustomerNewFeedPostScreen() {
             {mediaType === 'image' ? (
               <CachedImage uri={imageUri} style={styles.preview} contentFit="cover" />
             ) : (
-              <View style={styles.preview}>
-                <Text style={styles.previewVideoText}>🎥 Video seçildi</Text>
-              </View>
+              <Video
+                source={{ uri: imageUri }}
+                style={styles.preview}
+                resizeMode={ResizeMode.CONTAIN}
+                useNativeControls
+                isLooping
+                shouldPlay={false}
+              />
             )}
           </View>
         ) : null}
@@ -284,6 +345,51 @@ export default function CustomerNewFeedPostScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.backgroundSecondary },
   content: { padding: 20, paddingBottom: 40 },
+  shareNoticeBox: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginBottom: 16,
+    borderLeftWidth: 3,
+    borderLeftColor: '#1f2937',
+  },
+  shareNoticeText: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#1f2937',
+    fontWeight: '500',
+  },
+  locationBadge: {
+    marginTop: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(13, 148, 136, 0.12)',
+    borderRadius: 10,
+    borderLeftWidth: 3,
+    borderLeftColor: theme.colors.primary,
+  },
+  locationBadgeText: {
+    fontSize: 13,
+    color: theme.colors.text,
+    fontWeight: '600',
+  },
+  tagsRow: { marginBottom: 16 },
+  tagsRowContent: { gap: 8, paddingRight: 20 },
+  tagChip: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: theme.colors.borderLight,
+  },
+  tagChipActive: {
+    backgroundColor: theme.colors.primary + '20',
+    borderColor: theme.colors.primary,
+  },
+  tagChipText: { fontSize: 13, fontWeight: '600', color: theme.colors.textSecondary },
+  tagChipTextActive: { color: theme.colors.primary },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   noGuestText: { fontSize: 16, color: theme.colors.textSecondary, textAlign: 'center', marginBottom: 16, paddingHorizontal: 24 },
   retryBtn: { paddingVertical: 12, paddingHorizontal: 24, backgroundColor: theme.colors.primary, borderRadius: 12, marginBottom: 12 },
@@ -310,7 +416,6 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: theme.colors.borderLight,
   },
-  previewVideoText: { fontSize: 18, color: theme.colors.textSecondary, textAlign: 'center', marginTop: '40%' },
   label: { fontSize: 15, fontWeight: '600', color: theme.colors.text, marginBottom: 8 },
   input: {
     backgroundColor: theme.colors.surface,

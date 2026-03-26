@@ -15,16 +15,18 @@ export function ImagePreviewModal({ visible, uri, onClose }: ImagePreviewModalPr
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   if (!uri) return null;
+  const imageHeight = height - insets.top - insets.bottom;
   return (
     <Modal
       visible={visible}
       transparent
       animationType="fade"
       onRequestClose={onClose}
+      statusBarTranslucent
     >
       <Pressable style={styles.overlay} onPress={onClose}>
-        <Pressable style={styles.content} onPress={(e) => e.stopPropagation()}>
-          <CachedImage uri={uri} style={[styles.image, { width, height: height * 0.85 }]} contentFit="contain" />
+        <Pressable style={[styles.content, { width, height: imageHeight }]} onPress={(e) => e.stopPropagation()}>
+          <CachedImage uri={uri} style={[styles.image, { width, height: imageHeight }]} contentFit="contain" />
           <View style={[styles.closeBtnWrap, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
             <TouchableOpacity
               style={styles.closeBtn}
@@ -44,7 +46,7 @@ export function ImagePreviewModal({ visible, uri, onClose }: ImagePreviewModalPr
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.92)',
+    backgroundColor: 'rgba(0,0,0,0.95)',
     justifyContent: 'center',
     alignItems: 'center',
   },

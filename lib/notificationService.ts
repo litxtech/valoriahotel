@@ -8,6 +8,7 @@ import { log } from '@/lib/logger';
 
 const EDGE_FN_PUSH = 'send-expo-push';
 const EDGE_FN_NOTIFY_ADMINS = 'notify-admins';
+const EDGE_FN_NOTIFY_CONV_RECIPIENTS = 'notify-conversation-recipients';
 
 /** Push token’ları olan hedeflere Expo push gönderir (sessiz hata). */
 async function sendExpoPushToRecipients(params: {
@@ -204,6 +205,41 @@ export async function sendBulkToStaff(params: {
     data: { screen: 'notifications' },
   }).catch(() => {});
   return { count: rows.length };
+}
+
+/** Sohbet mesajı sonrası konuşmadaki alıcılara (gönderen hariç) sesli push bildirimi gönder. */
+export async function notifyConversationRecipients(params: {
+  conversationId: string;
+  excludeAppToken?: string | null;
+  excludeStaffId?: string | null;
+  title: string;
+  body?: string | null;
+  data?: Record<string, unknown>;
+}): Promise<{ sent?: number; failed?: number; error?: string }> {
+  const { conversationId, excludeAppToken, excludeStaffId, title, body, data } = params;
+  if (!conversationId || !title?.trim()) return { error: 'conversationId ve title gerekli' };
+  try {
+    const { data: result, error } = await supabase.functions.invoke(EDGE_FN_NOTIFY_CONV_RECIPIENTS, {
+      body: {
+        conversationId,
+        excludeAppToken: excludeAppToken ?? undefined,
+        excludeStaffId: excludeStaffId ?? undefined,
+        title: title.trim(),
+        body: body ?? null,
+        data: data ?? {},
+      },
+    });
+    if (error) {
+      log.warn('notificationService', 'notifyConversationRecipients', error);
+      return { error: error.message };
+    }
+    const r = result as { sent?: number; failed?: number } | null;
+    if (r?.sent != null) log.info('notificationService', 'mesaj push', { sent: r.sent, failed: r.failed ?? 0 });
+    return { sent: r?.sent, failed: r?.failed };
+  } catch (e) {
+    log.warn('notificationService', 'notifyConversationRecipients exception', e);
+    return { error: (e as Error).message };
+  }
 }
 
 /** Tüm admin hesaplarına (açık olan telefona) push bildirimi gönder. Panel bildirimleri için kullanın. */

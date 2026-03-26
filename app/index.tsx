@@ -23,12 +23,15 @@ import { useAuthStore } from '@/stores/authStore';
 import { supabase } from '@/lib/supabase';
 import { log } from '@/lib/logger';
 import { startGeofenceWatch, stopGeofenceWatch, type HotelGeofenceConfig } from '@/lib/geofencing';
+import * as Location from 'expo-location';
 import { useCustomerRoomStore } from '@/stores/customerRoomStore';
 import { linkGuestToRoom } from '@/lib/linkGuestToRoom';
 import { getOrCreateGuestForCaller } from '@/lib/getOrCreateGuestForCaller';
 import { hasPolicyConsent } from '@/lib/policyConsent';
 
 const GEOFENCE_CHECKIN_PROMPT_KEY = '@valoria/geofence_checkin_prompt_shown';
+const GEOFENCE_LOCATION_PERMISSION_PROMPT_KEY = '@valoria/geofence_location_permission_prompt_shown';
+const CHECKIN_PROMPT_CARD_DISMISSED_KEY = '@valoria/checkin_prompt_card_dismissed';
 
 function AnimatedLobbyBackground() {
   const { width, height } = useWindowDimensions();
@@ -152,8 +155,48 @@ export default function HomeScreen() {
   const [password, setPassword] = useState('');
   const [signInLoading, setSignInLoading] = useState(false);
   const [guestLoginLoading, setGuestLoginLoading] = useState(false);
+  const [notifStatus, setNotifStatus] = useState<'granted' | 'denied' | 'undetermined' | 'unavailable'>('undetermined');
+  const [notifLoading, setNotifLoading] = useState(false);
+  const [showCheckinPromptCard, setShowCheckinPromptCard] = useState<boolean | null>(null);
   const notifiedNearby = useRef(false);
   const scrollRef = useRef<ScrollViewType>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    AsyncStorage.getItem(CHECKIN_PROMPT_CARD_DISMISSED_KEY).then((val) => {
+      if (!cancelled) setShowCheckinPromptCard(val !== '1');
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  const dismissCheckinPromptCard = (goToGuest: boolean) => {
+    AsyncStorage.setItem(CHECKIN_PROMPT_CARD_DISMISSED_KEY, '1').catch(() => {});
+    setShowCheckinPromptCard(false);
+    if (goToGuest) router.push('/guest');
+  };
+
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    let cancelled = false;
+    const loadNotificationStatus = async () => {
+      try {
+        const Notifications = await import('expo-notifications');
+        const { status } = await Notifications.getPermissionsAsync();
+        if (cancelled) return;
+        if (status === 'granted' || status === 'denied' || status === 'undetermined') {
+          setNotifStatus(status);
+        } else {
+          setNotifStatus('unavailable');
+        }
+      } catch {
+        if (!cancelled) setNotifStatus('unavailable');
+      }
+    };
+    loadNotificationStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // QR ile açılan web: URL'de /guest/sign-one ve ?t= varsa sözleşme sayfasına git (router bazen önce index açar)
   useEffect(() => {
@@ -178,26 +221,57 @@ export default function HomeScreen() {
   useEffect(() => {
     if (!HOTEL_COORDS || staff) return;
     let cancelled = false;
+    let promptedThisSession = false;
     const run = async () => {
       try {
         const shown = await AsyncStorage.getItem(GEOFENCE_CHECKIN_PROMPT_KEY);
         if (shown === '1') return;
-        await startGeofenceWatch(
-          HOTEL_COORDS!,
-          async () => {
-            if (cancelled || notifiedNearby.current) return;
-            notifiedNearby.current = true;
-            await AsyncStorage.setItem(GEOFENCE_CHECKIN_PROMPT_KEY, '1');
-            Alert.alert(
-              t('nearbyCheckinTitle'),
-              t('nearbyCheckinMessage'),
-              [
-                { text: t('no'), style: 'cancel' },
-                { text: t('yes'), onPress: () => router.push('/guest') },
-              ]
-            );
-          },
-          (e) => log.warn('HomeScreen', 'Geofence', (e as Error)?.message)
+
+        const { status } = await Location.getForegroundPermissionsAsync();
+        if (cancelled) return;
+
+        const startWatch = async () => {
+          await startGeofenceWatch(
+            HOTEL_COORDS!,
+            async () => {
+              if (cancelled || notifiedNearby.current) return;
+              notifiedNearby.current = true;
+              await AsyncStorage.setItem(GEOFENCE_CHECKIN_PROMPT_KEY, '1');
+              Alert.alert(
+                t('nearbyCheckinTitle'),
+                t('nearbyCheckinMessage'),
+                [
+                  { text: t('no'), style: 'cancel' },
+                  { text: t('yes'), onPress: () => router.push('/guest') },
+                ]
+              );
+            },
+            (e) => log.warn('HomeScreen', 'Geofence', (e as Error)?.message)
+          );
+        };
+
+        if (status === 'granted') {
+          await startWatch();
+          return;
+        }
+
+        const alreadyPrompted = await AsyncStorage.getItem(GEOFENCE_LOCATION_PERMISSION_PROMPT_KEY);
+        if (alreadyPrompted === '1') return;
+        if (promptedThisSession) return;
+        promptedThisSession = true;
+
+        Alert.alert(
+          t('nearbyCheckinTitle'),
+          'Otele yakın olduğunuzda check-in önerisi gösterebilmek için konum izni kullanırız. Bu izleme yalnızca uygulama açıkken çalışır. İzin verir misiniz?',
+          [{
+            text: 'Continue',
+            onPress: () => {
+              // Aynı oturumda tekrar alert göstermemek için key'i set ediyoruz;
+              // Kullanıcı yine OS izin ekranından "Reddederse", konum iznini daha sonra `İzinler` ekranından açabilir.
+              AsyncStorage.setItem(GEOFENCE_LOCATION_PERMISSION_PROMPT_KEY, '1').catch(() => {});
+              void startWatch();
+            },
+          }]
         );
       } catch (e) {
         log.warn('HomeScreen', 'Geofence', (e as Error)?.message);
@@ -334,7 +408,7 @@ export default function HomeScreen() {
     setGoogleLoading(true);
     try {
       GoogleSignin.configure({
-        webClientId: '47373050426-peh0fdfi2f10thui8oh1kkgt6rk5qrvh.apps.googleusercontent.com',
+        webClientId: '47373050426-8men09t0m35sufet2n6nl21r4oq07gfo.apps.googleusercontent.com',
         offlineAccess: true,
       });
       await GoogleSignin.hasPlayServices();
@@ -426,6 +500,22 @@ export default function HomeScreen() {
     }
   };
 
+  const requestNotificationPermission = async () => {
+    if (Platform.OS === 'web' || notifLoading) return;
+    setNotifLoading(true);
+    try {
+      const Notifications = await import('expo-notifications');
+      const { status } = await Notifications.requestPermissionsAsync();
+      if (status === 'granted' || status === 'denied' || status === 'undetermined') {
+        setNotifStatus(status);
+      }
+    } catch {
+      setNotifStatus('unavailable');
+    } finally {
+      setNotifLoading(false);
+    }
+  };
+
   const cardWidth = width - 24;
   const paddingH = 12;
 
@@ -441,7 +531,7 @@ export default function HomeScreen() {
   if (user || staff) {
     return (
       <View style={[styles.wrapper, styles.redirectingWrapper, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-        <ActivityIndicator size="large" color="#b8860b" />
+        <ActivityIndicator size="large" color="#ffffff" />
         <Text style={styles.redirectingText}>{t('loading')}</Text>
       </View>
     );
@@ -465,6 +555,30 @@ export default function HomeScreen() {
           <Text style={styles.lobbyTaglineWhite}>{t('tagline')}</Text>
         </View>
 
+        {/* Check-in prompt kartı — bir kere sorulur, sonra gösterilmez */}
+        {showCheckinPromptCard === true && (
+          <View style={[styles.checkinPromptCard, { marginHorizontal: paddingH, width: cardWidth }]}>
+            <Text style={styles.checkinPromptTitle}>{t('nearbyCheckinTitle')}</Text>
+            <Text style={styles.checkinPromptMessage}>{t('checkinPromptCardMessage') || t('nearbyCheckinMessage')}</Text>
+            <View style={styles.checkinPromptActions}>
+              <TouchableOpacity
+                style={[styles.checkinPromptBtn, styles.checkinPromptBtnNo]}
+                onPress={() => dismissCheckinPromptCard(false)}
+                activeOpacity={0.82}
+              >
+                <Text style={styles.checkinPromptBtnNoText}>{t('no')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.checkinPromptBtn, styles.checkinPromptBtnYes]}
+                onPress={() => dismissCheckinPromptCard(true)}
+                activeOpacity={0.82}
+              >
+                <Text style={styles.checkinPromptBtnYesText}>{t('yes')}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
         <KeyboardAvoidingView
           style={[styles.cardsContainer, { width: cardWidth, marginHorizontal: paddingH }]}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -474,6 +588,35 @@ export default function HomeScreen() {
             <View style={styles.lobbyCardInner}>
               <View style={styles.lobbySection}>
                 <Text style={styles.lobbySectionTitle}>{t('signIn')}</Text>
+                {Platform.OS !== 'web' && notifStatus === 'undetermined' && (
+                  <View style={styles.permissionCard}>
+                    <Text style={styles.permissionCardTitle}>Bildirim izni</Text>
+                    <Text style={styles.permissionCardText}>
+                      Yeni mesajlar ve duyurular icin bildirim izni onerilir.
+                    </Text>
+                    <View style={styles.permissionCardActions}>
+                      <TouchableOpacity
+                        style={[styles.permissionBtn, notifLoading && styles.cardBtnDisabled]}
+                        onPress={requestNotificationPermission}
+                        disabled={notifLoading}
+                        activeOpacity={0.82}
+                      >
+                        {notifLoading ? (
+                          <ActivityIndicator size="small" color="#ffffff" />
+                        ) : (
+                          <Text style={styles.permissionBtnText}>Bildirim iznini goster</Text>
+                        )}
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.permissionLinkBtn}
+                        onPress={() => router.push('/permissions')}
+                        activeOpacity={0.82}
+                      >
+                        <Text style={styles.permissionLinkBtnText}>Tum izinler</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                )}
                 <TextInput
                   style={styles.input}
                   placeholder={t('emailPlaceholder')}
@@ -685,13 +828,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'transparent',
-    paddingHorizontal: 24,
+    paddingHorizontal: 28,
   },
   lobbyBrandWhite: {
     fontSize: 34,
     fontWeight: '800',
     color: '#ffffff',
-    letterSpacing: -0.8,
+    letterSpacing: Platform.OS === 'android' ? 0.5 : -0.8,
+    paddingHorizontal: 8,
   },
   lobbyTaglineWhite: {
     fontSize: 15,
@@ -699,6 +843,57 @@ const styles = StyleSheet.create({
     marginTop: 10,
     fontWeight: '500',
     textAlign: 'center',
+  },
+  checkinPromptCard: {
+    backgroundColor: 'rgba(255,255,255,0.98)',
+    borderRadius: 20,
+    padding: 20,
+    marginTop: -24,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.1,
+    shadowRadius: 16,
+    elevation: 6,
+  },
+  checkinPromptTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0f172a',
+    marginBottom: 8,
+  },
+  checkinPromptMessage: {
+    fontSize: 15,
+    color: '#475569',
+    lineHeight: 22,
+    marginBottom: 16,
+  },
+  checkinPromptActions: {
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'center',
+  },
+  checkinPromptBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  checkinPromptBtnNo: {
+    backgroundColor: '#f1f5f9',
+  },
+  checkinPromptBtnYes: {
+    backgroundColor: '#0d9488',
+  },
+  checkinPromptBtnNoText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+  checkinPromptBtnYesText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#ffffff',
   },
   bgOrb: {
     position: 'absolute',
@@ -718,6 +913,51 @@ const styles = StyleSheet.create({
   },
   lobbySection: {
     alignItems: 'stretch',
+  },
+  permissionCard: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 14,
+  },
+  permissionCardTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0f172a',
+    marginBottom: 4,
+  },
+  permissionCardText: {
+    fontSize: 12,
+    color: '#64748b',
+    lineHeight: 17,
+  },
+  permissionCardActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 10,
+  },
+  permissionBtn: {
+    backgroundColor: '#0d9488',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  permissionBtnText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  permissionLinkBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+  },
+  permissionLinkBtnText: {
+    color: '#0d9488',
+    fontSize: 12,
+    fontWeight: '700',
   },
   lobbySectionTitle: {
     fontSize: 20,

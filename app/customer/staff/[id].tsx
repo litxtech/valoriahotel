@@ -3,7 +3,6 @@ import {
   View,
   Text,
   ScrollView,
-  Image,
   StyleSheet,
   TouchableOpacity,
   Linking,
@@ -12,20 +11,25 @@ import {
   Modal,
   Pressable,
   TextInput,
+  Alert,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
-import { getOrCreateGuestForCaller } from '@/lib/getOrCreateGuestForCaller';
+import { getOrCreateGuestForCaller, getOrCreateGuestForCurrentSession } from '@/lib/getOrCreateGuestForCaller';
 import { guestGetOrCreateConversationWithStaff } from '@/lib/messagingApi';
 import { useGuestMessagingStore } from '@/stores/guestMessagingStore';
 import { useAuthStore } from '@/stores/authStore';
 import { theme } from '@/constants/theme';
-import { AvatarWithBadge } from '@/components/VerifiedBadge';
+import { AvatarWithBadge, StaffNameWithBadge } from '@/components/VerifiedBadge';
 import { CachedImage } from '@/components/CachedImage';
+import { ImagePreviewModal } from '@/components/ImagePreviewModal';
+import { blockUserForGuest, getHiddenUsersForGuest } from '@/lib/userBlocks';
 
-const COVER_HEIGHT = 240;
-const AVATAR_SIZE = 112;
+const COVER_HEIGHT = 260;
+const AVATAR_SIZE = 116;
+const HEADER_AVATAR_SIZE = 64;
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 type StaffDetail = {
@@ -51,6 +55,9 @@ type StaffDetail = {
   email: string | null;
   whatsapp: string | null;
   shift?: { start_time: string; end_time: string } | null;
+  role?: string | null;
+  show_gold_profile_border?: boolean | null;
+  verification_badge?: 'blue' | 'yellow' | null;
 };
 
 type Review = {
@@ -66,6 +73,7 @@ const CUSTOMER_REVIEW_LIMIT = 5;
 export default function StaffProfileScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { user } = useAuthStore();
   const { appToken, setAppToken } = useGuestMessagingStore();
   const [staff, setStaff] = useState<StaffDetail | null>(null);
@@ -73,14 +81,26 @@ export default function StaffProfileScreen() {
   const [loading, setLoading] = useState(true);
   const [startingChat, setStartingChat] = useState(false);
   const [coverModalVisible, setCoverModalVisible] = useState(false);
+  const [avatarModalVisible, setAvatarModalVisible] = useState(false);
   const [rateModalVisible, setRateModalVisible] = useState(false);
   const [reviewsModalVisible, setReviewsModalVisible] = useState(false);
   const [rateStars, setRateStars] = useState(0);
   const [rateComment, setRateComment] = useState('');
   const [submittingReview, setSubmittingReview] = useState(false);
+  const [myReview, setMyReview] = useState<Review | null>(null);
+  const [profileMenuVisible, setProfileMenuVisible] = useState(false);
 
   const loadStaff = useCallback(async () => {
     if (!id) return;
+      const guestRow = await getOrCreateGuestForCurrentSession();
+      if (guestRow?.guest_id) {
+        const hidden = await getHiddenUsersForGuest(guestRow.guest_id);
+        if (hidden.hiddenStaffIds.has(id)) {
+          setStaff(null);
+          setLoading(false);
+          return;
+        }
+      }
       // RPC kullan: profil ziyaretlerinde telefon/e-posta kesin gelsin (migration 042)
       const { data: rows, error: e } = await supabase.rpc('get_staff_public_profile', {
         p_staff_id: id,
@@ -165,8 +185,42 @@ export default function StaffProfileScreen() {
       } else {
         setReviews(reviewRows.map(({ guest_id: _, ...rest }) => rest));
       }
+      // Mevcut kullanıcının bu çalışana verdiği puan var mı? (bir kullanıcı bir çalışana sadece bir kez puan verebilir)
+      const email = (user?.email ?? user?.user_metadata?.email ?? '').toString().trim();
+      if (email) {
+        const { data: guest } = await supabase
+          .from('guests')
+          .select('id')
+          .eq('email', email)
+          .limit(1)
+          .maybeSingle();
+        if (guest?.id) {
+          const { data: existing } = await supabase
+            .from('staff_reviews')
+            .select('id, rating, comment, created_at')
+            .eq('staff_id', id)
+            .eq('guest_id', guest.id)
+            .limit(1)
+            .maybeSingle();
+          if (existing) {
+            setMyReview({
+              id: existing.id,
+              rating: existing.rating,
+              comment: existing.comment,
+              created_at: existing.created_at,
+              guest: null,
+            });
+          } else {
+            setMyReview(null);
+          }
+        } else {
+          setMyReview(null);
+        }
+      } else {
+        setMyReview(null);
+      }
       setLoading(false);
-  }, [id]);
+  }, [id, user?.email, user?.user_metadata?.email]);
 
   useEffect(() => {
     loadStaff();
@@ -200,6 +254,7 @@ export default function StaffProfileScreen() {
   };
 
   const openRateModal = () => {
+    if (myReview) return; // Zaten puan verdiyse modal açma
     setRateStars(0);
     setRateComment('');
     setRateModalVisible(true);
@@ -226,7 +281,16 @@ export default function StaffProfileScreen() {
         rating: rateStars,
         comment: rateComment.trim() || null,
       });
-      if (error) throw error;
+      if (error) {
+        if (error.code === '23505') {
+          setRateModalVisible(false);
+          setSubmittingReview(false);
+          setMyReview(null);
+          await loadStaff();
+          return; // Unique constraint: zaten puan vermiş, listeyi güncelle
+        }
+        throw error;
+      }
       setRateModalVisible(false);
       await loadStaff();
     } catch {
@@ -239,6 +303,34 @@ export default function StaffProfileScreen() {
   const onCall = () => {
     const phone = staff?.phone?.trim();
     if (phone) Linking.openURL(`tel:${phone}`);
+  };
+
+  const handleBlockFromProfile = async () => {
+    const guestRow = await getOrCreateGuestForCurrentSession();
+    if (!guestRow?.guest_id || !id) {
+      Alert.alert('Giriş gerekli', 'Kullanıcı engellemek için giriş yapın.');
+      return;
+    }
+    Alert.alert('Kullanıcıyı engelle', 'Bu personel artık sizi göremez ve siz de onu göremezsiniz.', [
+      { text: 'İptal', style: 'cancel' },
+      {
+        text: 'Engelle',
+        style: 'destructive',
+        onPress: async () => {
+          const { error } = await blockUserForGuest({
+            blockerGuestId: guestRow.guest_id,
+            blockedType: 'staff',
+            blockedId: id,
+          });
+          if (error && error.code !== '23505') {
+            Alert.alert('Hata', error.message || 'Kullanıcı engellenemedi.');
+            return;
+          }
+          setProfileMenuVisible(false);
+          router.back();
+        },
+      },
+    ]);
   };
 
   if (loading) {
@@ -266,16 +358,44 @@ export default function StaffProfileScreen() {
   const showPhone = (staff.show_phone_to_guest !== false) && hasPhone;
   const showEmail = (staff.show_email_to_guest !== false) && hasEmail;
   const showWhatsApp = (staff.show_whatsapp_to_guest !== false) && hasWhatsApp;
+  const showGoldBorder =
+    staff.role === 'admin' && (staff.show_gold_profile_border ?? false);
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-      <View style={styles.headerBar}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
-        </TouchableOpacity>
-      </View>
+    <View style={[styles.container, showGoldBorder && styles.containerGoldBorder]}>
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <Modal
+        visible={profileMenuVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setProfileMenuVisible(false)}
+      >
+        <Pressable style={styles.imageModalOverlay} onPress={() => setProfileMenuVisible(false)}>
+          <View style={styles.profileMenuBox}>
+            <TouchableOpacity style={styles.profileMenuItem} onPress={handleBlockFromProfile} activeOpacity={0.7}>
+              <Ionicons name="ban-outline" size={20} color={theme.colors.error} />
+              <Text style={styles.profileMenuItemText}>Engelle</Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Modal>
 
       <View style={styles.coverBlock}>
+        <TouchableOpacity
+          style={[styles.coverActionBtn, styles.coverBackBtn, { top: insets.top + 8 }]}
+          onPress={() => router.back()}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="chevron-back" size={24} color={theme.colors.white} />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.coverActionBtn, styles.coverMenuBtn, { top: insets.top + 8 }]}
+          onPress={() => setProfileMenuVisible(true)}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="ellipsis-horizontal" size={22} color={theme.colors.white} />
+        </TouchableOpacity>
+        <View style={styles.coverGradient} pointerEvents="none" />
         <TouchableOpacity
           style={styles.coverImageClip}
           activeOpacity={1}
@@ -287,15 +407,21 @@ export default function StaffProfileScreen() {
             <View style={styles.coverPlaceholder} />
           )}
         </TouchableOpacity>
-        <View style={styles.avatarOnCover}>
-          <AvatarWithBadge badge={staff.verification_badge ?? null} avatarSize={120} badgeSize={20}>
-            <CachedImage uri={staff.profile_image || 'https://via.placeholder.com/120'} style={styles.avatar} contentFit="cover" />
-          </AvatarWithBadge>
-        </View>
       </View>
-      <View style={[styles.avatarHeaderWrap, { paddingTop: AVATAR_SIZE / 2 + 8 }]}>
+      <View style={styles.profileHeaderRow}>
+        <TouchableOpacity activeOpacity={1} onPress={() => staff.profile_image && setAvatarModalVisible(true)}>
+          <AvatarWithBadge badge={staff.verification_badge ?? null} avatarSize={HEADER_AVATAR_SIZE} badgeSize={18} showBadge={false}>
+            {staff.profile_image ? (
+              <CachedImage uri={staff.profile_image} style={[styles.avatar, styles.avatarSmall]} contentFit="cover" />
+            ) : (
+              <View style={[styles.avatar, styles.avatarPlaceholder, styles.avatarSmall]}>
+                <Text style={styles.avatarLetterSmall}>{(staff.full_name || '?').charAt(0).toUpperCase()}</Text>
+              </View>
+            )}
+          </AvatarWithBadge>
+        </TouchableOpacity>
         <View style={styles.header}>
-          <Text style={styles.name}>{staff.full_name || 'Personel'}</Text>
+          <StaffNameWithBadge name={staff.full_name || 'Personel'} badge={staff.verification_badge ?? null} badgeSize={18} textStyle={styles.name} center />
           <Text style={styles.dept}>{staff.position || staff.department || '—'}</Text>
           <View style={styles.onlineRow}>
             <View style={[styles.dot, staff.is_online ? styles.dotOn : styles.dotOff]} />
@@ -452,30 +578,32 @@ export default function StaffProfileScreen() {
         >
           <Ionicons name="chatbubble-outline" size={20} color={theme.colors.white} />
         </TouchableOpacity>
-        <TouchableOpacity
-          onPress={openRateModal}
-          style={[styles.avatarActionCircle, styles.avatarActionStar]}
-          activeOpacity={0.8}
-        >
-          <Ionicons name="star-outline" size={20} color={theme.colors.primary} />
-        </TouchableOpacity>
+        {myReview ? (
+          <View style={[styles.avatarActionCircle, styles.avatarActionStarDone]}>
+            <Ionicons name="star" size={20} color={theme.colors.primary} />
+          </View>
+        ) : (
+          <TouchableOpacity
+            onPress={openRateModal}
+            style={[styles.avatarActionCircle, styles.avatarActionStar]}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="star-outline" size={20} color={theme.colors.primary} />
+          </TouchableOpacity>
+        )}
       </View>
       <View style={styles.bottomPad} />
 
-      <Modal
+      <ImagePreviewModal
         visible={coverModalVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setCoverModalVisible(false)}
-      >
-        <Pressable style={styles.imageModalOverlay} onPress={() => setCoverModalVisible(false)}>
-          <Pressable style={styles.imageModalContent} onPress={() => {}}>
-            {staff.cover_image ? (
-              <CachedImage uri={staff.cover_image} style={styles.imageModalImage} contentFit="contain" />
-            ) : null}
-          </Pressable>
-        </Pressable>
-      </Modal>
+        uri={staff.cover_image ?? null}
+        onClose={() => setCoverModalVisible(false)}
+      />
+      <ImagePreviewModal
+        visible={avatarModalVisible}
+        uri={staff.profile_image ?? null}
+        onClose={() => setAvatarModalVisible(false)}
+      />
 
       <Modal
         visible={reviewsModalVisible}
@@ -524,16 +652,23 @@ export default function StaffProfileScreen() {
               >
                 <Text style={styles.reviewsModalCloseText}>Kapat</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.reviewsModalCloseBtn, styles.reviewsModalRateBtn]}
-                onPress={() => {
-                  setReviewsModalVisible(false);
-                  openRateModal();
-                }}
-              >
-                <Ionicons name="star-outline" size={18} color={theme.colors.white} />
-                <Text style={styles.reviewsModalRateText}>Puan ver</Text>
-              </TouchableOpacity>
+              {myReview ? (
+                <View style={[styles.reviewsModalCloseBtn, styles.reviewsModalRateDone]}>
+                  <Ionicons name="star" size={18} color={theme.colors.primary} />
+                  <Text style={styles.reviewsModalRateDoneText}>Puan verdiniz</Text>
+                </View>
+              ) : (
+                <TouchableOpacity
+                  style={[styles.reviewsModalCloseBtn, styles.reviewsModalRateBtn]}
+                  onPress={() => {
+                    setReviewsModalVisible(false);
+                    openRateModal();
+                  }}
+                >
+                  <Ionicons name="star-outline" size={18} color={theme.colors.white} />
+                  <Text style={styles.reviewsModalRateText}>Puan ver</Text>
+                </TouchableOpacity>
+              )}
             </View>
           </Pressable>
         </Pressable>
@@ -602,7 +737,8 @@ export default function StaffProfileScreen() {
           </Pressable>
         </Pressable>
       </Modal>
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
@@ -626,21 +762,50 @@ function formatReviewDate(iso: string) {
   return d.toLocaleDateString('tr-TR');
 }
 
+const GOLD_COLOR = '#D4AF37';
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.backgroundSecondary },
+  containerGoldBorder: {
+    borderLeftWidth: 4,
+    borderRightWidth: 4,
+    borderTopWidth: 4,
+    borderColor: GOLD_COLOR,
+  },
+  scroll: { flex: 1 },
+  scrollContent: { paddingBottom: 32 },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
   loadingText: { marginTop: 8, fontSize: 15, color: theme.colors.textMuted },
   errorText: { fontSize: 16, color: theme.colors.text },
   backBtn: { marginTop: 16, paddingVertical: 12, paddingHorizontal: 24, backgroundColor: theme.colors.primary, borderRadius: 12 },
   backBtnText: { color: theme.colors.white, fontWeight: '600' },
-  headerBar: { flexDirection: 'row', paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4 },
-  backButton: { padding: 8 },
   coverBlock: {
     width: SCREEN_WIDTH,
     height: COVER_HEIGHT,
     position: 'relative',
     overflow: 'visible',
     backgroundColor: theme.colors.borderLight,
+  },
+  coverActionBtn: {
+    position: 'absolute',
+    zIndex: 10,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  coverBackBtn: { left: 16 },
+  coverMenuBtn: { right: 16 },
+  coverGradient: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 100,
+    zIndex: 2,
+    backgroundColor: 'rgba(0,0,0,0.2)',
   },
   coverImageClip: {
     position: 'absolute',
@@ -654,14 +819,23 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: theme.colors.borderLight,
   },
-  avatarOnCover: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: -AVATAR_SIZE / 2 + 55,
+  profileHeaderRow: {
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 16,
+    paddingVertical: 20,
+    paddingHorizontal: theme.spacing.lg,
+    backgroundColor: theme.colors.surface,
+    marginHorizontal: 16,
+    marginTop: 12,
+    borderRadius: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 4,
   },
-  avatarHeaderWrap: { alignItems: 'center', paddingBottom: 4 },
   avatar: {
     width: AVATAR_SIZE,
     height: AVATAR_SIZE,
@@ -672,9 +846,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     elevation: 6,
   },
-  header: { alignItems: 'center', paddingHorizontal: 20, paddingTop: 6 },
-  name: { ...theme.typography.title, color: theme.colors.text },
-  dept: { fontSize: 16, color: theme.colors.primary, marginTop: 4 },
+  avatarSmall: { width: HEADER_AVATAR_SIZE, height: HEADER_AVATAR_SIZE, borderRadius: HEADER_AVATAR_SIZE / 2, borderWidth: 2 },
+  avatarPlaceholder: { justifyContent: 'center', alignItems: 'center' },
+  avatarLetterSmall: { fontSize: 24, fontWeight: '700', color: theme.colors.primary },
+  header: { alignItems: 'center', paddingHorizontal: 20, paddingTop: 0 },
+  name: { ...theme.typography.title, fontSize: 24, color: theme.colors.text, textAlign: 'center' },
+  dept: { fontSize: 16, fontWeight: '600', color: theme.colors.primary, marginTop: 4 },
   onlineRow: { flexDirection: 'row', alignItems: 'center', marginTop: 8 },
   dot: { width: 10, height: 10, borderRadius: 5, marginRight: 6 },
   dotOn: { backgroundColor: theme.colors.success },
@@ -684,9 +861,13 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 16, fontWeight: '700', color: theme.colors.text, marginBottom: 8 },
   card: {
     backgroundColor: theme.colors.surface,
-    borderRadius: theme.radius.lg,
+    borderRadius: 20,
     padding: theme.spacing.lg,
-    ...theme.shadows.sm,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 4,
   },
   row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6 },
   rowLabel: { fontSize: 14, color: theme.colors.textMuted },
@@ -721,7 +902,10 @@ const styles = StyleSheet.create({
   avatarActionMail: { backgroundColor: theme.colors.accent },
   avatarActionMessage: { backgroundColor: theme.colors.primary },
   avatarActionStar: { backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.primary },
+  avatarActionStarDone: { backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.primary },
   bottomPad: { height: 32 },
+  reviewsModalRateDone: { flex: 1, paddingVertical: 12, borderRadius: theme.radius.md, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6, backgroundColor: theme.colors.borderLight },
+  reviewsModalRateDoneText: { fontSize: 15, fontWeight: '600', color: theme.colors.text },
   reviewsModalBox: {
     width: '100%',
     maxWidth: 360,
@@ -759,6 +943,17 @@ const styles = StyleSheet.create({
   },
   imageModalContent: { maxWidth: '100%', maxHeight: '90%', justifyContent: 'center', alignItems: 'center' },
   imageModalImage: { width: SCREEN_WIDTH, height: 280, maxWidth: '100%' },
+  profileMenuBox: {
+    marginTop: 80,
+    marginLeft: 'auto',
+    marginRight: 24,
+    backgroundColor: theme.colors.surface,
+    borderRadius: 12,
+    minWidth: 160,
+    paddingVertical: 8,
+  },
+  profileMenuItem: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 12 },
+  profileMenuItemText: { color: theme.colors.error, fontSize: 15, fontWeight: '600' },
   rateModalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',

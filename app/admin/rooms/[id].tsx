@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Platform, Modal } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Platform, Modal, TextInput, KeyboardAvoidingView, FlatList } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
@@ -7,6 +7,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '@/lib/supabase';
 import { DesignableQR, FramedQR, type QRDesign, type QRCodeRef, type QRFrameStyle, QR_FRAME_LABELS } from '@/components/DesignableQR';
 import { FIXED_CONTRACT_QR_URL } from '@/constants/contractQr';
+import { VAT_RATE, ACCOMMODATION_TAX_RATE } from '@/constants/hmbHotel';
+import { useAuthStore } from '@/stores/authStore';
+import { sendNotification } from '@/lib/notificationService';
+import { GUEST_TYPES, GUEST_MESSAGE_TEMPLATES } from '@/lib/notifications';
 
 type Room = {
   id: string;
@@ -50,6 +54,9 @@ function resolveRoomDesign(settings: SettingsRow | null): QRDesign | null {
 
 type QrType = 'checkin' | 'contract';
 
+type CurrentGuest = { id: string; full_name: string };
+type PendingAcceptance = { id: string; guest_id: string; accepted_at: string; signer_name: string | null };
+
 const FRAME_OPTIONS: QRFrameStyle[] = ['minimal', 'bordered', 'modern', 'elegant'];
 
 const defaultDesign: QRDesign = {
@@ -71,7 +78,9 @@ const contractDefaultDesign: QRDesign = {
 export default function RoomDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
+  const { staff } = useAuthStore();
   const [room, setRoom] = useState<Room | null>(null);
+  const [currentGuest, setCurrentGuest] = useState<CurrentGuest | null>(null);
   const [qrValue, setQrValue] = useState<string>('');
   const [contractQrValue, setContractQrValue] = useState<string>('');
   const [roomDesign, setRoomDesign] = useState<QRDesign | null>(null);
@@ -82,12 +91,30 @@ export default function RoomDetail() {
   const [qrDrawerVisible, setQrDrawerVisible] = useState(false);
   const [selectedQrType, setSelectedQrType] = useState<QrType | null>(null);
   const [selectedFrame, setSelectedFrame] = useState<QRFrameStyle>('modern');
+  const [whoNextModalVisible, setWhoNextModalVisible] = useState(false);
+  const [pendingAcceptances, setPendingAcceptances] = useState<PendingAcceptance[]>([]);
+  const [assignFormVisible, setAssignFormVisible] = useState(false);
+  const [selectedGuestId, setSelectedGuestId] = useState<string | null>(null);
+  const [priceInput, setPriceInput] = useState('');
+  const [nightsInput, setNightsInput] = useState('');
+  const [actionLoading, setActionLoading] = useState(false);
 
   useEffect(() => {
     if (!id) return;
     (async () => {
       const { data } = await supabase.from('rooms').select('*').eq('id', id).single();
       setRoom(data ?? null);
+      if (data?.status === 'occupied') {
+        const { data: guest } = await supabase
+          .from('guests')
+          .select('id, full_name')
+          .eq('room_id', id)
+          .eq('status', 'checked_in')
+          .maybeSingle();
+        setCurrentGuest(guest ?? null);
+      } else {
+        setCurrentGuest(null);
+      }
       const { data: appSettings } = await supabase.from('app_settings').select('key, value').in('key', ['checkin_qr_base_url', 'contract_qr_base_url']);
       const settingsMap: Record<string, string> = {};
       (appSettings ?? []).forEach((r: { key: string; value: unknown }) => {
@@ -174,6 +201,123 @@ export default function RoomDetail() {
     setContractQrValue(FIXED_CONTRACT_QR_URL);
   };
 
+  const loadPendingAcceptances = useCallback(async () => {
+    const { data: list } = await supabase
+      .from('contract_acceptances')
+      .select('id, guest_id, accepted_at, guests(full_name)')
+      .not('guest_id', 'is', null)
+      .order('accepted_at', { ascending: false })
+      .limit(50);
+    const withGuest = (list ?? []).filter((r: { guests?: { full_name: string } | { full_name: string }[] | null }) => {
+      const g = Array.isArray(r.guests) ? r.guests[0] : r.guests;
+      return g != null;
+    });
+    const guestIds = withGuest.map((r: { guest_id: string }) => r.guest_id);
+    if (guestIds.length === 0) {
+      setPendingAcceptances([]);
+      return;
+    }
+    const { data: guests } = await supabase.from('guests').select('id, status, room_id').in('id', guestIds);
+    const pendingIds = new Set((guests ?? []).filter((g) => g.status === 'pending' && !g.room_id).map((g) => g.id));
+    setPendingAcceptances(
+      withGuest
+        .filter((r: { guest_id: string }) => pendingIds.has(r.guest_id))
+        .map((r: { id: string; guest_id: string; accepted_at: string; guests: { full_name: string } | { full_name: string }[] }) => {
+          const g = Array.isArray(r.guests) ? r.guests[0] : r.guests;
+          return { id: r.id, guest_id: r.guest_id, accepted_at: r.accepted_at, signer_name: g?.full_name ?? null };
+        })
+    );
+  }, []);
+
+  const handleCheckOut = () => {
+    if (!currentGuest || !id) return;
+    Alert.alert('Odadan çık', `${currentGuest.full_name} çıkış yapılsın mı?`, [
+      { text: 'İptal', style: 'cancel' },
+      {
+        text: 'Çıkış yap',
+        style: 'destructive',
+        onPress: async () => {
+          setActionLoading(true);
+          const { error } = await supabase
+            .from('guests')
+            .update({ status: 'checked_out', check_out_at: new Date().toISOString(), room_id: null })
+            .eq('id', currentGuest.id);
+          if (error) {
+            Alert.alert('Hata', error.message);
+            setActionLoading(false);
+            return;
+          }
+          await supabase.from('rooms').update({ status: 'available' }).eq('id', id);
+          setCurrentGuest(null);
+          setRoom((prev) => (prev ? { ...prev, status: 'available' } : null));
+          setActionLoading(false);
+          await loadPendingAcceptances();
+          setWhoNextModalVisible(true);
+        },
+      },
+    ]);
+  };
+
+  const openAssignForm = (guestId: string) => {
+    setSelectedGuestId(guestId);
+    setPriceInput(room?.price_per_night ? String(room.price_per_night) : '');
+    setNightsInput('');
+    setAssignFormVisible(true);
+  };
+
+  const confirmAssignToRoom = async () => {
+    if (!id || !selectedGuestId) return;
+    const price = priceInput.trim() ? parseFloat(priceInput.replace(',', '.')) : null;
+    const nights = nightsInput.trim() ? parseInt(nightsInput, 10) : null;
+    if (price == null || price < 0 || !nights || nights < 1) {
+      Alert.alert('Hata', 'Geçerli bir fiyat ve en az 1 gün girin.');
+      return;
+    }
+    const totalNet = price * nights;
+    const vatAmount = Math.round(totalNet * VAT_RATE * 100) / 100;
+    const accommodationTaxAmount = Math.round(totalNet * ACCOMMODATION_TAX_RATE * 100) / 100;
+    setActionLoading(true);
+    const { error } = await supabase
+      .from('guests')
+      .update({
+        room_id: id,
+        status: 'checked_in',
+        check_in_at: new Date().toISOString(),
+        total_amount_net: totalNet,
+        vat_amount: vatAmount,
+        accommodation_tax_amount: accommodationTaxAmount,
+        nights_count: nights,
+      })
+      .eq('id', selectedGuestId);
+    if (error) {
+      Alert.alert('Hata', error.message);
+      setActionLoading(false);
+      return;
+    }
+    await supabase.from('rooms').update({ status: 'occupied' }).eq('id', id);
+    const { data: newGuest } = await supabase.from('guests').select('id, full_name').eq('id', selectedGuestId).single();
+    setCurrentGuest(newGuest ?? null);
+    setRoom((prev) => (prev ? { ...prev, status: 'occupied' } : null));
+    if (newGuest) {
+      const msg = GUEST_MESSAGE_TEMPLATES[GUEST_TYPES.admin_assigned_room]({ roomNumber: room?.room_number ?? '' });
+      await sendNotification({
+        guestId: newGuest.id,
+        title: msg.title,
+        body: msg.body,
+        notificationType: GUEST_TYPES.admin_assigned_room,
+        category: 'guest',
+        createdByStaffId: staff?.id ?? undefined,
+      });
+    }
+    await supabase.from('contract_acceptances').update({ room_id: id }).eq('guest_id', selectedGuestId);
+    setWhoNextModalVisible(false);
+    setAssignFormVisible(false);
+    setSelectedGuestId(null);
+    setPriceInput('');
+    setNightsInput('');
+    setActionLoading(false);
+  };
+
   if (loading || !room) return <Text style={styles.loading}>Yükleniyor...</Text>;
 
   return (
@@ -183,6 +327,15 @@ export default function RoomDetail() {
         <Text style={styles.label}>Durum</Text>
         <Text style={styles.value}>{room.status}</Text>
       </View>
+      {room.status === 'occupied' && currentGuest && (
+        <View style={styles.section}>
+          <Text style={styles.label}>Konaklayan</Text>
+          <Text style={styles.value}>{currentGuest.full_name}</Text>
+          <TouchableOpacity style={styles.checkOutRoomBtn} onPress={handleCheckOut} disabled={actionLoading}>
+            <Text style={styles.checkOutRoomBtnText}>Odadan çık</Text>
+          </TouchableOpacity>
+        </View>
+      )}
       {room.floor != null && (
         <View style={styles.section}>
           <Text style={styles.label}>Kat</Text>
@@ -268,6 +421,93 @@ export default function RoomDetail() {
           </>
         )}
       </View>
+
+      <Modal visible={whoNextModalVisible} transparent animationType="fade">
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => !actionLoading && setWhoNextModalVisible(false)}
+        >
+          <View style={styles.modalContent} onStartShouldSetResponder={() => true}>
+            <Text style={styles.modalTitle}>Kimi koymak istersin?</Text>
+            <Text style={styles.modalSub}>Sözleşme onayı yapmış, henüz oda atanmamış misafirler:</Text>
+            {pendingAcceptances.length === 0 ? (
+              <Text style={styles.emptyList}>Listelenecek misafir yok. Yeni sözleşme onayı geldiğinde burada görünür.</Text>
+            ) : (
+              <FlatList
+                data={pendingAcceptances}
+                keyExtractor={(item) => item.guest_id}
+                style={styles.acceptanceList}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={styles.acceptanceItem}
+                    onPress={() => {
+                      setWhoNextModalVisible(false);
+                      openAssignForm(item.guest_id);
+                    }}
+                  >
+                    <Text style={styles.acceptanceName}>{item.signer_name ?? 'Misafir'}</Text>
+                    <Text style={styles.acceptanceDate}>{new Date(item.accepted_at).toLocaleString('tr-TR')}</Text>
+                  </TouchableOpacity>
+                )}
+              />
+            )}
+            <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setWhoNextModalVisible(false)}>
+              <Text style={styles.modalCloseBtnText}>Kapat</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      <Modal visible={assignFormVisible} transparent animationType="fade">
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => !actionLoading && setAssignFormVisible(false)}
+        >
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.modalContentWrap}
+          >
+            <View style={styles.modalContent} onStartShouldSetResponder={() => true}>
+              <Text style={styles.modalTitle}>Odaya yerleştir – Maliye bilgileri</Text>
+              <Text style={styles.modalSub}>Oda {room?.room_number}</Text>
+              <Text style={styles.inputLabel}>Gece başı fiyat (₺)</Text>
+              <TextInput
+                style={styles.input}
+                value={priceInput}
+                onChangeText={setPriceInput}
+                keyboardType="decimal-pad"
+                placeholder="Örn. 1500"
+              />
+              <Text style={styles.inputLabel}>Kaç gün kalacak?</Text>
+              <TextInput
+                style={styles.input}
+                value={nightsInput}
+                onChangeText={setNightsInput}
+                keyboardType="number-pad"
+                placeholder="Örn. 3"
+              />
+              <View style={styles.modalActions}>
+                <TouchableOpacity
+                  style={[styles.confirmAssignBtn, actionLoading && styles.btnDisabled]}
+                  onPress={confirmAssignToRoom}
+                  disabled={actionLoading}
+                >
+                  {actionLoading ? (
+                    <Text style={styles.confirmAssignText}>Kaydediliyor...</Text>
+                  ) : (
+                    <Text style={styles.confirmAssignText}>Yerleştir</Text>
+                  )}
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.modalCloseBtn} onPress={() => !actionLoading && setAssignFormVisible(false)}>
+                  <Text style={styles.modalCloseBtnText}>İptal</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </KeyboardAvoidingView>
+        </TouchableOpacity>
+      </Modal>
 
       <Modal visible={qrDrawerVisible} transparent animationType="slide">
         <TouchableOpacity style={styles.drawerOverlay} activeOpacity={1} onPress={() => setQrDrawerVisible(false)}>
@@ -368,4 +608,24 @@ const styles = StyleSheet.create({
   drawerChipTextActive: { color: '#fff' },
   drawerDoneBtn: { marginTop: 24, padding: 16, backgroundColor: '#1a365d', borderRadius: 12, alignItems: 'center' },
   drawerDoneText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  checkOutRoomBtn: { marginTop: 12, padding: 14, backgroundColor: '#e53e3e', borderRadius: 12, alignItems: 'center' },
+  checkOutRoomBtnText: { color: '#fff', fontWeight: '600', fontSize: 16 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 24 },
+  modalContentWrap: { maxWidth: 400, width: '100%', alignSelf: 'center' },
+  modalContent: { backgroundColor: '#fff', borderRadius: 16, padding: 20, maxHeight: '80%' },
+  modalTitle: { fontSize: 18, fontWeight: '700', color: '#1a202c', marginBottom: 4 },
+  modalSub: { fontSize: 14, color: '#718096', marginBottom: 16 },
+  emptyList: { fontSize: 14, color: '#64748b', marginBottom: 16 },
+  acceptanceList: { maxHeight: 260, marginBottom: 12 },
+  acceptanceItem: { paddingVertical: 14, paddingHorizontal: 4, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
+  acceptanceName: { fontSize: 16, fontWeight: '600', color: '#1a202c' },
+  acceptanceDate: { fontSize: 12, color: '#718096', marginTop: 4 },
+  inputLabel: { fontSize: 13, fontWeight: '600', color: '#4a5568', marginBottom: 6 },
+  input: { borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, padding: 12, fontSize: 16, marginBottom: 12 },
+  modalActions: { gap: 10 },
+  confirmAssignBtn: { padding: 14, backgroundColor: '#1a365d', borderRadius: 12, alignItems: 'center' },
+  btnDisabled: { opacity: 0.7 },
+  confirmAssignText: { color: '#fff', fontWeight: '600', fontSize: 16 },
+  modalCloseBtn: { padding: 12, alignItems: 'center' },
+  modalCloseBtnText: { fontSize: 15, color: '#64748b', fontWeight: '600' },
 });

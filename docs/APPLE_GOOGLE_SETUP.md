@@ -68,7 +68,7 @@ Valoria Hotel uygulamasını **App Store (Apple)** ve **Google Play (Google)** y
 ### 8. Özel izinler (NFC, Konum, Face ID)
 - **Info.plist** (Expo `app.json` → `ios.infoPlist`):
   - Konum: `NSLocationWhenInUseUsageDescription`, `NSLocationAlwaysAndWhenInUseUsageDescription` (zaten eklendi).
-  - Face ID: `NSFaceIDUsageDescription` (zaten eklendi).
+  - Biyometrik (Face/Touch): `NSFaceIDUsageDescription` kaldırıldı.
 - NFC (okuma/yazma) kullanacaksanız: Apple Developer’da App ID’de **NFC Tag Reading** capability’sini açın; gerekirse **NFC Background Tag Reading** (uygulama kapalıyken etiket okuma).
 
 ---

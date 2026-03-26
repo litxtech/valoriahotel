@@ -3,8 +3,12 @@ import { View, Text, StyleSheet, TouchableOpacity, FlatList, Modal, TextInput, A
 import { Link } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
+import { invokeEdgeWithAuth } from '@/lib/invokeEdgeWithAuth';
+import { getEdgeFunctionErrorMessage } from '@/lib/functionsError';
 import { useAuthStore } from '@/stores/authStore';
+import { CachedImage } from '@/components/CachedImage';
 import { adminTheme } from '@/constants/adminTheme';
+import { getAuthProviderLabel } from '@/lib/updateGuestLoginInfo';
 
 const BAN_DURATIONS = [
   { label: '1 saat', hours: 1 },
@@ -28,7 +32,18 @@ type Guest = {
   deleted_at?: string | null;
   last_login_device_id?: string | null;
   is_guest_app_account?: boolean;
+  photo_url?: string | null;
+  last_login_platform?: string | null;
+  last_login_at?: string | null;
+  auth_provider?: string | null;
+  auth_user_created_at?: string | null;
 };
+
+function formatPlatform(platform: string | null | undefined): string {
+  if (!platform) return '';
+  const m: Record<string, string> = { android: 'Android', ios: 'iOS', web: 'Web' };
+  return m[platform] ?? platform;
+}
 
 export default function GuestsList() {
   const currentStaffId = useAuthStore((s) => s.staff?.id);
@@ -74,6 +89,11 @@ export default function GuestsList() {
         deleted_at?: string | null;
         last_login_device_id?: string | null;
         is_guest_app_account?: boolean;
+        photo_url?: string | null;
+        last_login_platform?: string | null;
+        last_login_at?: string | null;
+        auth_provider?: string | null;
+        auth_user_created_at?: string | null;
       }>;
       setGuests(
         list.map((row) => ({
@@ -90,6 +110,11 @@ export default function GuestsList() {
           deleted_at: row.deleted_at,
           last_login_device_id: row.last_login_device_id,
           is_guest_app_account: row.is_guest_app_account,
+          photo_url: row.photo_url,
+          last_login_platform: row.last_login_platform,
+          last_login_at: row.last_login_at,
+          auth_provider: row.auth_provider,
+          auth_user_created_at: row.auth_user_created_at,
         }))
       );
 
@@ -131,8 +156,11 @@ export default function GuestsList() {
     }
     setDeleting(true);
     try {
-      const { data, error } = await supabase.functions.invoke('delete-user-account', {
-        body: { mode: 'admin', target_auth_id: deleteTarget.auth_user_id, user_type: 'guest', admin_reason: adminReason.trim() },
+      const { data, error } = await invokeEdgeWithAuth('delete-user-account', {
+        mode: 'admin',
+        target_auth_id: deleteTarget.auth_user_id,
+        user_type: 'guest',
+        admin_reason: adminReason.trim(),
       });
       if (error) throw error;
       if ((data as { error?: string })?.error) throw new Error((data as { error: string }).error);
@@ -141,7 +169,8 @@ export default function GuestsList() {
       await load();
       Alert.alert('Başarılı', 'Hesap silindi.');
     } catch (e) {
-      Alert.alert('Hata', (e as Error)?.message ?? 'Silinemedi.');
+      const msg = await getEdgeFunctionErrorMessage(e);
+      Alert.alert('Hata', msg || 'Silinemedi.');
     } finally {
       setDeleting(false);
     }
@@ -206,10 +235,19 @@ export default function GuestsList() {
             <View style={styles.card}>
               <Link href={`/admin/guests/${item.id}`} asChild>
                 <TouchableOpacity style={styles.cardInner} activeOpacity={0.8}>
-                  <Text style={styles.name}>{item.full_name}</Text>
+                  <View style={styles.cardRow}>
+                    <View style={styles.avatarWrap}>
+                      {item.photo_url ? (
+                        <CachedImage uri={item.photo_url} style={styles.avatarImg} contentFit="cover" />
+                      ) : (
+                        <Text style={styles.avatarLetter}>{(item.full_name || '?').charAt(0).toUpperCase()}</Text>
+                      )}
+                    </View>
+                    <View style={styles.cardBody}>
+                      <Text style={styles.name}>{item.full_name}</Text>
                   {(item.phone || item.email) && <Text style={styles.meta}>{item.phone || item.email}</Text>}
                   <View style={styles.badges}>
-                    {item.is_guest_app_account && <View style={styles.badgeGuestApp}><Text style={styles.badgeText}>Misafir hesap</Text></View>}
+                    {item.is_guest_app_account && <View style={styles.badgeGuestApp}><Text style={styles.badgeText}>Misafir hesap (Guest app)</Text></View>}
                     {item.deleted_at && <View style={styles.badgeDeleted}><Text style={styles.badgeText}>Silindi</Text></View>}
                     {item.banned_until && new Date(item.banned_until) > new Date() && <View style={styles.badgeBanned}><Text style={styles.badgeText}>Banlı</Text></View>}
                     {isRisky(item) && <View style={styles.badgeRisky}><Text style={styles.badgeText}>Riskli</Text></View>}
@@ -217,8 +255,18 @@ export default function GuestsList() {
                       <Text style={styles.badgeText}>{item.status}</Text>
                     </View>
                   </View>
-                  <Text style={styles.date}>{formatDate(item.created_at)}</Text>
-                  {item.rooms?.room_number && <Text style={styles.room}>Oda {item.rooms.room_number}</Text>}
+                      <Text style={styles.date}>Kayıt: {formatDate(item.created_at)}</Text>
+                      {(item.last_login_platform || item.auth_provider) && (
+                        <Text style={styles.deviceInfo}>
+                          {[formatPlatform(item.last_login_platform), getAuthProviderLabel(item.auth_provider ?? undefined)].filter(Boolean).join(' · ')}
+                        </Text>
+                      )}
+                      {item.last_login_at && (
+                        <Text style={styles.lastLogin}>Son giriş: {formatDate(item.last_login_at)}</Text>
+                      )}
+                      {item.rooms?.room_number && <Text style={styles.room}>Oda {item.rooms.room_number}</Text>}
+                    </View>
+                  </View>
                 </TouchableOpacity>
               </Link>
               {!item.deleted_at && item.auth_user_id && (
@@ -304,6 +352,20 @@ const styles = StyleSheet.create({
   tabTextActive: { color: '#fff' },
   loading: { padding: 24 },
   list: { padding: 16 },
+  cardRow: { flexDirection: 'row', alignItems: 'flex-start' },
+  avatarWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#e2e8f0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+    overflow: 'hidden',
+  },
+  avatarImg: { width: 48, height: 48, borderRadius: 24 },
+  avatarLetter: { fontSize: 20, fontWeight: '700', color: '#4a5568' },
+  cardBody: { flex: 1, minWidth: 0 },
   card: {
     backgroundColor: '#fff',
     padding: 16,
@@ -325,6 +387,8 @@ const styles = StyleSheet.create({
   badgePending: { backgroundColor: '#feebc8' },
   badgeText: { fontSize: 12, fontWeight: '600', color: '#1a202c' },
   date: { fontSize: 12, color: '#a0aec0', marginTop: 4 },
+  deviceInfo: { fontSize: 12, color: '#64748b', marginTop: 2 },
+  lastLogin: { fontSize: 12, color: '#94a3b8', marginTop: 2 },
   room: { fontSize: 14, color: '#2b6cb0', marginTop: 4 },
   actionRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#e2e8f0' },
   actionBtn: { padding: 8 },

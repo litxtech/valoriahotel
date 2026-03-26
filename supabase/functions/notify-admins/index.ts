@@ -78,6 +78,10 @@ Deno.serve(async (req: Request) => {
       to,
       title: title.trim(),
       body: messageBody?.trim() ?? undefined,
+      channelId: "valoria_urgent",
+      priority: "high" as const,
+      sound: "default" as const,
+      interruptionLevel: "active" as const,
       data: payload,
     }));
 

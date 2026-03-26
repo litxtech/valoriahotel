@@ -8,15 +8,18 @@ import {
   RefreshControl,
   ActivityIndicator,
   Platform,
+  Alert,
 } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useGuestMessagingStore } from '@/stores/guestMessagingStore';
-import { guestListConversations } from '@/lib/messagingApi';
+import { guestDeleteConversation, guestListConversations } from '@/lib/messagingApi';
 import type { ConversationWithMeta } from '@/lib/messaging';
 import { MESSAGING_COLORS } from '@/lib/messaging';
 import { supabase } from '@/lib/supabase';
 import { formatRelative } from '@/lib/date';
 import { getOrCreateGuestForCaller } from '@/lib/getOrCreateGuestForCaller';
+import { CachedImage } from '@/components/CachedImage';
+import { SwipeToDelete } from '@/components/SwipeToDelete';
 
 /** Sohbet adından avatar emoji tahmini: oda numarası → grup, aksi halde ilk harf */
 function chatAvatarChar(name: string | null | undefined): string {
@@ -94,6 +97,26 @@ export default function CustomerMessagesScreen() {
       return () => {};
     }, [setUnreadCount])
   );
+
+  const handleDeleteConversation = (item: ConversationWithMeta) => {
+    if (!appToken) return;
+    const name = item.name || 'Sohbet';
+    Alert.alert('Sohbeti sil', `"${name}" sohbetini listenizden kaldırmak istiyor musunuz?`, [
+      { text: 'İptal', style: 'cancel' },
+      {
+        text: 'Sil',
+        style: 'destructive',
+        onPress: async () => {
+          const ok = await guestDeleteConversation(appToken, item.id);
+          if (!ok) {
+            Alert.alert('Hata', 'Sohbet silinemedi.');
+            return;
+          }
+          setConversations((prev) => prev.filter((c) => c.id !== item.id));
+        },
+      },
+    ]);
+  };
 
   if (authChecked && !appToken) {
     if (!hasSession) {
@@ -175,36 +198,42 @@ export default function CustomerMessagesScreen() {
           const name = item.name || 'Sohbet';
           const unread = item.unread_count ?? 0;
           return (
-            <TouchableOpacity
-              style={styles.card}
-              onPress={() =>
-                router.push({
-                  pathname: '/customer/chat/[id]',
-                  params: { id: item.id, name },
-                })
-              }
-              activeOpacity={0.7}
-            >
-              <View style={styles.avatar}>
-                <Text style={styles.avatarText}>{chatAvatarChar(name)}</Text>
-              </View>
-              <View style={styles.cardBody}>
-                <Text style={styles.cardName} numberOfLines={1}>{name}</Text>
-                <Text style={styles.cardPreview} numberOfLines={1}>
-                  {item.last_message_preview || '—'}
-                </Text>
-              </View>
-              <View style={styles.cardMeta}>
-                <Text style={styles.cardTime}>
-                  {item.last_message_at ? formatRelative(item.last_message_at) : '—'}
-                </Text>
-                {unread > 0 && (
-                  <View style={styles.badge}>
-                    <Text style={styles.badgeText}>{unread > 99 ? '99+' : unread}</Text>
-                  </View>
-                )}
-              </View>
-            </TouchableOpacity>
+            <SwipeToDelete onSwipeDelete={() => handleDeleteConversation(item)}>
+              <TouchableOpacity
+                style={styles.card}
+                onPress={() =>
+                  router.push({
+                    pathname: '/customer/chat/[id]',
+                    params: { id: item.id, name },
+                  })
+                }
+                activeOpacity={0.7}
+              >
+                <View style={styles.avatar}>
+                  {item.avatar ? (
+                    <CachedImage uri={item.avatar} style={styles.avatarImg} contentFit="cover" />
+                  ) : (
+                    <Text style={styles.avatarText}>{chatAvatarChar(name)}</Text>
+                  )}
+                </View>
+                <View style={styles.cardBody}>
+                  <Text style={styles.cardName} numberOfLines={1}>{name}</Text>
+                  <Text style={styles.cardPreview} numberOfLines={1}>
+                    {item.last_message_preview || '—'}
+                  </Text>
+                </View>
+                <View style={styles.cardMeta}>
+                  <Text style={styles.cardTime}>
+                    {item.last_message_at ? formatRelative(item.last_message_at) : '—'}
+                  </Text>
+                  {unread > 0 && (
+                    <View style={styles.badge}>
+                      <Text style={styles.badgeText}>{unread > 99 ? '99+' : unread}</Text>
+                    </View>
+                  )}
+                </View>
+              </TouchableOpacity>
+            </SwipeToDelete>
           );
         }}
       />
@@ -261,7 +290,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
+    overflow: 'hidden',
   },
+  avatarImg: { width: 48, height: 48 },
   avatarText: { fontSize: 24 },
   cardBody: { flex: 1, minWidth: 0 },
   cardName: { fontWeight: '600', fontSize: 16, color: MESSAGING_COLORS.text },

@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase';
 import { log } from '@/lib/logger';
+import { updateGuestLoginInfo } from '@/lib/updateGuestLoginInfo';
 import type { User } from '@supabase/supabase-js';
 
 /**
@@ -20,6 +21,7 @@ export function getGuestFullNameFromUser(user: User | null | undefined): string 
  * Çağıran kullanıcı (auth.uid()) için misafir getir veya oluştur.
  * Apple/Google girişte JWT'de email olmayabilir; 046 migration auth_user_id ile eşleştirir.
  * is_new: bu oturumda yeni kayıt oluşturulduysa true (misafir hesap bildirimi için).
+ * Arka planda cihaz/platform/kayıt bilgisi admin panele gönderilir.
  */
 export async function getOrCreateGuestForCaller(user: User | null | undefined): Promise<{ guest_id: string; app_token: string; is_new?: boolean } | null> {
   if (!user) return null;
@@ -34,6 +36,9 @@ export async function getOrCreateGuestForCaller(user: User | null | undefined): 
   const row = Array.isArray(guestRow) && guestRow[0]
     ? (guestRow[0] as { guest_id: string; app_token: string; is_new?: boolean })
     : null;
+  if (row) {
+    updateGuestLoginInfo(user).catch((e) => log.warn('getOrCreateGuestForCaller', 'updateGuestLoginInfo', (e as Error)?.message));
+  }
   return row ?? null;
 }
 

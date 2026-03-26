@@ -135,9 +135,13 @@ export default function StaffStockListScreen() {
           <Ionicons name="log-out-outline" size={18} color="#fff" />
           <Text style={styles.smallBtnText}>Stok Çıkışı</Text>
         </TouchableOpacity>
+        <TouchableOpacity style={styles.allStocksBtn} onPress={() => router.push('/staff/stock/my-movements')} activeOpacity={0.8}>
+          <Ionicons name="list-outline" size={18} color={theme.colors.primary} />
+          <Text style={styles.allStocksBtnText}>Stoklarım</Text>
+        </TouchableOpacity>
         <TouchableOpacity style={styles.allStocksBtn} onPress={() => router.push('/staff/stock/all')} activeOpacity={0.8}>
           <Ionicons name="layers-outline" size={18} color={theme.colors.primary} />
-          <Text style={styles.allStocksBtnText}>Tüm Stoklarım</Text>
+          <Text style={styles.allStocksBtnText}>Tüm Stoklar</Text>
         </TouchableOpacity>
       </View>
 

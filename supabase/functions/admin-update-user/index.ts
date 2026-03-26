@@ -25,8 +25,8 @@ Deno.serve(async (req: Request) => {
   const authHeader = req.headers.get("Authorization") ?? req.headers.get("authorization");
   const token = authHeader?.replace(/^Bearer\s+/i, "").trim() ?? null;
   if (!token) {
-    return new Response(JSON.stringify({ error: "Yetkisiz: Token gerekli" }), {
-      status: 401,
+    return new Response(JSON.stringify({ success: false, error: "Yetkisiz: Token gerekli" }), {
+      status: 200,
       headers: { ...CORS, "Content-Type": "application/json" },
     });
   }
@@ -35,8 +35,8 @@ Deno.serve(async (req: Request) => {
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
   if (!supabaseUrl || !serviceKey || !anonKey) {
-    return new Response(JSON.stringify({ error: "Sunucu yapılandırma hatası" }), {
-      status: 500,
+    return new Response(JSON.stringify({ success: false, error: "Sunucu yapılandırma hatası" }), {
+      status: 200,
       headers: { ...CORS, "Content-Type": "application/json" },
     });
   }
@@ -48,8 +48,8 @@ Deno.serve(async (req: Request) => {
 
   const { data: { user }, error: userError } = await supabaseUser.auth.getUser();
   if (userError || !user) {
-    return new Response(JSON.stringify({ error: "Oturum bulunamadı" }), {
-      status: 401,
+    return new Response(JSON.stringify({ success: false, error: "Oturum bulunamadı" }), {
+      status: 200,
       headers: { ...CORS, "Content-Type": "application/json" },
     });
   }
@@ -62,8 +62,8 @@ Deno.serve(async (req: Request) => {
     .eq("is_active", true)
     .maybeSingle();
   if (!adminStaff) {
-    return new Response(JSON.stringify({ error: "Yetkisiz: Sadece admin şifre değiştirebilir" }), {
-      status: 403,
+    return new Response(JSON.stringify({ success: false, error: "Yetkisiz: Sadece admin şifre değiştirebilir" }), {
+      status: 200,
       headers: { ...CORS, "Content-Type": "application/json" },
     });
   }
@@ -72,16 +72,16 @@ Deno.serve(async (req: Request) => {
   try {
     body = (await req.json()) as Body;
   } catch {
-    return new Response(JSON.stringify({ error: "Geçersiz JSON" }), {
-      status: 400,
+    return new Response(JSON.stringify({ success: false, error: "Geçersiz JSON" }), {
+      status: 200,
       headers: { ...CORS, "Content-Type": "application/json" },
     });
   }
 
   const { target_auth_id, new_password } = body;
   if (!target_auth_id || !new_password || new_password.length < 6) {
-    return new Response(JSON.stringify({ error: "target_auth_id ve new_password (en az 6 karakter) gerekli" }), {
-      status: 400,
+    return new Response(JSON.stringify({ success: false, error: "target_auth_id ve new_password (en az 6 karakter) gerekli" }), {
+      status: 200,
       headers: { ...CORS, "Content-Type": "application/json" },
     });
   }
@@ -90,8 +90,8 @@ Deno.serve(async (req: Request) => {
     password: new_password,
   });
   if (updateErr) {
-    return new Response(JSON.stringify({ error: updateErr.message || "Şifre güncellenemedi" }), {
-      status: 400,
+    return new Response(JSON.stringify({ success: false, error: updateErr.message || "Şifre güncellenemedi" }), {
+      status: 200,
       headers: { ...CORS, "Content-Type": "application/json" },
     });
   }

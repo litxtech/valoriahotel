@@ -8,11 +8,12 @@ import {
   TouchableOpacity,
   Alert,
   ActivityIndicator,
+  Linking,
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
-import { getExpoPushTokenAsync, savePushTokenForStaff } from '@/lib/notificationsPush';
+import { getExpoPushTokenAsync, savePushTokenForStaff, isExpoGo } from '@/lib/notificationsPush';
 import { useAuthStore } from '@/stores/authStore';
 import { useStaffNotificationStore } from '@/stores/staffNotificationStore';
 
@@ -32,15 +33,24 @@ export default function StaffNotificationsScreen() {
   const [list, setList] = useState<NotifRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingAll, setDeletingAll] = useState(false);
+  const [pushPerm, setPushPerm] = useState<'granted' | 'denied' | 'undetermined' | 'unknown'>('unknown');
+  const [enablingPush, setEnablingPush] = useState(false);
 
   const load = useCallback(async () => {
     if (!staff?.id) {
       setLoading(false);
       return;
     }
-    // Bildirim iznini bu sekme açıldığında (kullanım anında) iste
-    const token = await getExpoPushTokenAsync();
-    if (token) savePushTokenForStaff(staff.id).catch(() => {});
+    // Push iznini otomatik isteme: sadece durum kontrol et.
+    if (!isExpoGo) {
+      try {
+        const Notifications = await import('expo-notifications').then((m) => m.default);
+        const { status } = await Notifications.getPermissionsAsync();
+        setPushPerm(status === 'granted' ? 'granted' : status === 'denied' ? 'denied' : 'undetermined');
+      } catch {
+        setPushPerm('unknown');
+      }
+    }
     const { data } = await supabase
       .from('notifications')
       .select('id, title, body, category, read_at, created_at, data')
@@ -83,6 +93,49 @@ export default function StaffNotificationsScreen() {
       return () => setNotificationsScreenFocused(false);
     }, [setUnreadCount, setNotificationsScreenFocused, load])
   );
+
+  const enablePush = useCallback(async () => {
+    if (enablingPush) return;
+    if (isExpoGo) {
+      Alert.alert(
+        'Push bildirimleri desteklenmiyor',
+        'Push bildirimleri Expo Go içinde çalışmaz. Lütfen development build veya yüklenmiş uygulama (App Store / Play Store) ile deneyin.',
+        [{ text: 'Tamam' }]
+      );
+      return;
+    }
+    if (!staff?.id) return;
+    setEnablingPush(true);
+    try {
+      const token = await getExpoPushTokenAsync();
+      if (token) {
+        await savePushTokenForStaff(staff.id);
+        setPushPerm('granted');
+      } else {
+        try {
+          const Notifications = await import('expo-notifications').then((m) => m.default);
+          const { status } = await Notifications.getPermissionsAsync();
+          setPushPerm(status === 'granted' ? 'granted' : status === 'denied' ? 'denied' : 'undetermined');
+          if (status === 'denied') {
+            Alert.alert(
+              'Bildirim izni reddedildi',
+              'Bildirim almak için lütfen ayarlardan izin verin.',
+              [
+                { text: 'İptal', style: 'cancel' },
+                { text: 'Ayarları aç', onPress: () => Linking.openSettings() },
+              ]
+            );
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+    } catch (e) {
+      Alert.alert('Hata', 'İzin alınırken bir sorun oluştu. Lütfen tekrar deneyin.');
+    } finally {
+      setEnablingPush(false);
+    }
+  }, [staff?.id, enablingPush]);
 
   const markRead = async (id: string) => {
     if (!staff?.id) return;
@@ -148,6 +201,44 @@ export default function StaffNotificationsScreen() {
     >
       <Text style={styles.title}>Bildirimlerim</Text>
       <Text style={styles.subtitle}>Yeni görevler, acil durumlar ve duyurular burada.</Text>
+      {!isExpoGo && (pushPerm === 'denied' || pushPerm === 'undetermined') && (
+        <View style={styles.pushCard}>
+          <View style={styles.pushCardRow}>
+            <Ionicons name="notifications-outline" size={20} color="#2b6cb0" />
+            <Text style={styles.pushCardTitle}>Bildirim izni gerekli</Text>
+          </View>
+          <Text style={styles.pushCardDesc}>
+            {pushPerm === 'denied'
+              ? 'Bildirim izni daha önce reddedildi. Ayarlardan izin verebilirsiniz.'
+              : 'Görevler ve duyurular için bildirim izni verin. İzni istemek için butona dokunun.'}
+          </Text>
+          <View style={styles.pushCardBtnRow}>
+            <TouchableOpacity
+              style={[styles.pushCardBtn, enablingPush && styles.pushCardBtnDisabled]}
+              onPress={enablePush}
+              disabled={enablingPush}
+              activeOpacity={0.8}
+            >
+              {enablingPush ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={styles.pushCardBtnText}>
+                  {pushPerm === 'denied' ? 'Tekrar iste' : 'Bildirim izni ver'}
+                </Text>
+              )}
+            </TouchableOpacity>
+            {pushPerm === 'denied' && (
+              <TouchableOpacity
+                style={styles.pushCardBtnSecondary}
+                onPress={() => Linking.openSettings()}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.pushCardBtnSecondaryText}>Ayarları aç</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      )}
       {list.length > 0 && (
         <TouchableOpacity
           style={[styles.deleteAllBtn, deletingAll && styles.deleteAllBtnDisabled]}
@@ -195,6 +286,35 @@ const styles = StyleSheet.create({
   message: { fontSize: 16, color: '#718096' },
   title: { fontSize: 20, fontWeight: '700', color: '#1a202c', marginBottom: 4 },
   subtitle: { fontSize: 14, color: '#718096', marginBottom: 20 },
+  pushCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 14,
+    marginBottom: 14,
+  },
+  pushCardRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  pushCardTitle: { fontSize: 15, fontWeight: '700', color: '#1a202c' },
+  pushCardDesc: { fontSize: 13, color: '#4a5568', lineHeight: 18 },
+  pushCardBtnRow: { marginTop: 12, gap: 10 },
+  pushCardBtn: {
+    backgroundColor: '#2b6cb0',
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  pushCardBtnDisabled: { opacity: 0.7 },
+  pushCardBtnText: { color: '#fff', fontWeight: '700' },
+  pushCardBtnSecondary: {
+    marginTop: 6,
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#2b6cb0',
+  },
+  pushCardBtnSecondaryText: { color: '#2b6cb0', fontWeight: '600' },
   deleteAllBtn: {
     flexDirection: 'row',
     alignItems: 'center',

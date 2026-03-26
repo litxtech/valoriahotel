@@ -1,10 +1,11 @@
 import '@/lib/cryptoPolyfill';
+import '@/lib/weakRefPolyfill';
 import i18n, { LANG_STORAGE_KEY, LANGUAGES } from '../i18n';
 import { getDeviceLanguageCode } from '@/lib/deviceLocale';
 import { Stack, useRouter, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useRef, useState } from 'react';
-import { AppState, Alert, View, Image, Animated, StyleSheet, Platform, LayoutAnimation } from 'react-native';
+import { AppState, View, Image, Animated, StyleSheet, Platform, LayoutAnimation, I18nManager } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SplashScreen from 'expo-splash-screen';
 import * as Linking from 'expo-linking';
@@ -24,6 +25,7 @@ import {
   addNotificationResponseListener,
   addNotificationReceivedListener,
   savePushTokenForStaff,
+  registerIOSPushTokenListener,
 } from '@/lib/notificationsPush';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { OfflineBanner } from '@/components/OfflineBanner';
@@ -34,7 +36,7 @@ if (Platform.OS !== 'web') {
 }
 log.info('RootLayout', 'app başlatılıyor');
 
-const splashLogoSource = require('../assets/valoria-splash-logo.png');
+const splashLogoSource = require('../assets/splash-icon.png');
 
 const WEB_BG = '#1a365d';
 
@@ -60,20 +62,21 @@ export default function RootLayout() {
       };
     }
   }, []);
-  // Açılış logosu: çok kısa göster (sadece native)
+  // Açılış logosu: kısa göster, hızlı geçiş (native splash sonrası ~220ms)
   useEffect(() => {
     if (Platform.OS === 'web') return;
     const t = setTimeout(() => {
       Animated.sequence([
-        Animated.timing(splashOpacity, { toValue: 1, duration: 120, useNativeDriver: true }),
-        Animated.delay(140),
-        Animated.timing(splashOpacity, { toValue: 0, duration: 120, useNativeDriver: true }),
+        Animated.timing(splashOpacity, { toValue: 1, duration: 80, useNativeDriver: true }),
+        Animated.delay(60),
+        Animated.timing(splashOpacity, { toValue: 0, duration: 80, useNativeDriver: true }),
       ]).start(() => setShowSplashLogo(false));
-    }, 20);
+    }, 5);
     return () => clearTimeout(t);
   }, [splashOpacity]);
 
   // Dil: Önce kaydedilmiş tercih, yoksa cihaz dili; böylece uygulama tam seçilen dilde açılır
+  // Arapça için RTL: dil değişince yönü güncelle (uygulama yeniden başlatıldığında tam uygulanır)
   useEffect(() => {
     const supportedCodes = new Set(LANGUAGES.map((l) => l.code));
     AsyncStorage.getItem(LANG_STORAGE_KEY).then((saved) => {
@@ -83,6 +86,13 @@ export default function RootLayout() {
           : getDeviceLanguageCode();
       if (i18n.language !== lang) i18n.changeLanguage(lang);
       if (!saved) AsyncStorage.setItem(LANG_STORAGE_KEY, lang);
+      // Arapça RTL: Platform.web'de I18nManager yok
+      if (Platform.OS !== 'web' && typeof I18nManager?.forceRTL === 'function') {
+        const isRTL = lang === 'ar';
+        if (I18nManager.isRTL !== isRTL) {
+          I18nManager.forceRTL(isRTL);
+        }
+      }
     });
   }, []);
   // Splash'ı hemen gizle, anasayfa/redirect görünsün (web'de native splash yok)
@@ -115,14 +125,29 @@ export default function RootLayout() {
     };
   }, []);
 
-  // Staff giriş yaptıysa push token al ve kaydet (beğeni/yorum push’u iOS dahil çalışsın)
+  // iOS: push token listener at app start (SDK 53+ workaround)
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    const cleanup = registerIOSPushTokenListener();
+    return cleanup;
+  }, []);
+
+  // Staff push token (beğeni/yorum bildirimi)
   useEffect(() => {
     if (!staff) return;
-    getExpoPushTokenAsync()
-      .then((token) => {
-        if (token) savePushTokenForStaff(staff.id).catch((e) => log.warn('RootLayout', 'push token kayıt', e));
-      })
-      .catch((e) => log.warn('RootLayout', 'push token', e));
+    const run = () => {
+      getExpoPushTokenAsync()
+        .then((token) => {
+          if (token) savePushTokenForStaff(staff.id).catch((e) => log.warn('RootLayout', 'push token kayıt', e));
+        })
+        .catch((e) => log.warn('RootLayout', 'push token', e));
+    };
+    run();
+    // iOS: token bazen gecikmeli gelir; uygulama ön plana gelince tekrar dene
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') run();
+    });
+    return () => sub.remove();
   }, [staff?.id]);
 
   // Bildirime tıklandığında yönlendir (aynı mantık hem listener hem cold start için)
@@ -138,7 +163,7 @@ export default function RootLayout() {
       } else {
         router.push(url);
       }
-    } else if (data?.screen === 'admin' || (staff?.role === 'admin' && data?.screen === 'notifications')) {
+    } else if (data?.screen === 'admin') {
       router.push('/admin');
     } else if (data?.screen === 'notifications') {
       const goToNotifications = () => router.push('/go-to-notifications');
@@ -169,9 +194,9 @@ export default function RootLayout() {
     return remove;
   }, [router]);
 
-  // Uygulama öndeyken bildirim gelince badge hemen güncellensin, sonra uyarı göster
+  // Uygulama öndeyken bildirim gelince badge güncellensin. Banner+ses setNotificationHandler ile sistem tarafından gösterilir (Alert modal sesi bastırabiliyordu).
   useEffect(() => {
-    const remove = addNotificationReceivedListener((notification) => {
+    const remove = addNotificationReceivedListener(() => {
       const { staff } = useAuthStore.getState();
       if (staff) {
         import('@/stores/staffNotificationStore').then(({ useStaffNotificationStore }) =>
@@ -182,18 +207,6 @@ export default function RootLayout() {
           useGuestNotificationStore.getState().refresh()
         );
       }
-      const content = notification.request.content;
-      const title = (content.title as string) || 'Bildirim';
-      const body = (content.body as string) || '';
-      Alert.alert(title, body, [
-        { text: 'Tamam' },
-        {
-          text: 'Bildirimlere git',
-          onPress: () => {
-            requestAnimationFrame(() => setTimeout(() => router.push('/go-to-notifications'), 100));
-          },
-        },
-      ]);
     });
     return remove;
   }, [router]);
@@ -398,17 +411,17 @@ const styles = StyleSheet.create({
     zIndex: 9999,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: '#ffffff',
   },
   splashLogoBg: {
-    flex: 1,
-    width: '100%',
+    ...StyleSheet.absoluteFillObject,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#ffffff',
   },
   splashLogoImage: {
-    width: '100%',
-    maxWidth: 460,
+    width: '70%',
+    maxWidth: 260,
     aspectRatio: 1,
   },
 });

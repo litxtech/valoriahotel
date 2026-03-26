@@ -16,6 +16,7 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '@/lib/supabase';
 import { uriToArrayBuffer } from '@/lib/uploadMedia';
+import { ensureMediaLibraryPermission } from '@/lib/mediaLibraryPermission';
 
 const VERSION = 2;
 
@@ -44,9 +45,12 @@ export default function RulesContractEdit() {
   }, []);
 
   const addImage = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('İzin gerekli', 'Galeri erişimi resim eklemek için gerekli.');
+    const granted = await ensureMediaLibraryPermission({
+      title: 'Galeri izni',
+      message: 'Sozlesmeye resim eklemek icin galeri erisimi istiyoruz.',
+      settingsMessage: 'Galeri izni kapali. Sozlesmeye resim eklemek icin ayarlardan izin verin.',
+    });
+    if (!granted) {
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({

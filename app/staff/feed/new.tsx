@@ -13,15 +13,17 @@ import {
 } from 'react-native';
 import { useRouter, Stack } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
+import { Video, ResizeMode } from 'expo-av';
 import { useAuthStore } from '@/stores/authStore';
 import { supabase } from '@/lib/supabase';
 import { uriToArrayBuffer } from '@/lib/uploadMedia';
 import { CachedImage } from '@/components/CachedImage';
+import { ensureCameraPermission } from '@/lib/cameraPermission';
+import { ensureMediaLibraryPermission } from '@/lib/mediaLibraryPermission';
+import { POST_TAGS, type PostTagValue } from '@/lib/feedPostTags';
 
 const VISIBILITY_OPTIONS = [
   { value: 'all_staff', label: 'Tüm personel' },
-  { value: 'my_team', label: 'Sadece ekibim (aynı departman)' },
-  { value: 'managers_only', label: 'Sadece yöneticiler' },
   { value: 'customers', label: 'Müşteri ana sayfasında da görünsün (personel + müşteriler)' },
 ] as const;
 
@@ -34,12 +36,16 @@ export default function NewFeedPostScreen() {
   const [mediaType, setMediaType] = useState<'image' | 'video'>('image');
   const [title, setTitle] = useState('');
   const [visibility, setVisibility] = useState<string>('all_staff');
+  const [postTag, setPostTag] = useState<PostTagValue>(null);
   const [uploading, setUploading] = useState(false);
 
   const pickImage = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('İzin', 'Galeri erişimi gerekli.');
+    const granted = await ensureMediaLibraryPermission({
+      title: 'Galeri izni',
+      message: 'Paylasim icin galeriden foto/video secmek amaciyla izin istiyoruz.',
+      settingsMessage: 'Galeri izni kapali. Paylasim icin ayarlardan galeri iznini acin.',
+    });
+    if (!granted) {
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -60,11 +66,12 @@ export default function NewFeedPostScreen() {
   };
 
   const takePhoto = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('İzin', 'Kamera erişimi gerekli.');
-      return;
-    }
+    const granted = await ensureCameraPermission({
+      title: 'Kamera izni',
+      message: 'Paylaşım için fotoğraf çekmek amacıyla kamera erişimi istiyoruz.',
+      settingsMessage: 'Kamera izni kapalı. Paylaşım için ayarlardan kamera iznini açın.',
+    });
+    if (!granted) return;
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.All,
       allowsEditing: false,
@@ -132,6 +139,7 @@ export default function NewFeedPostScreen() {
           thumbnail_url: thumbnailUrl,
           title: (title ?? '').trim() || null,
           visibility,
+          post_tag: postTag || null,
         })
         .select('id')
         .single();
@@ -187,6 +195,20 @@ export default function NewFeedPostScreen() {
     <>
       <Stack.Screen options={{ title: 'Yeni paylaşım', headerStyle: { backgroundColor: '#fff' }, headerTintColor: '#1a1d21' }} />
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+        <Text style={styles.label}>Etiket (isteğe bağlı)</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tagsRow} contentContainerStyle={styles.tagsRowContent}>
+          {POST_TAGS.map((tag) => (
+            <TouchableOpacity
+              key={tag.value}
+              style={[styles.tagChip, postTag === tag.value && styles.tagChipActive]}
+              onPress={() => setPostTag(postTag === tag.value ? null : tag.value)}
+              activeOpacity={0.7}
+              disabled={uploading}
+            >
+              <Text style={[styles.tagChipText, postTag === tag.value && styles.tagChipTextActive]}>{tag.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
         <Text style={styles.label}>Metin (sadece metinle de paylaşabilirsiniz)</Text>
         <TextInput
           style={[styles.input, styles.inputMultiline]}
@@ -226,9 +248,14 @@ export default function NewFeedPostScreen() {
             {mediaType === 'image' ? (
               <CachedImage uri={imageUri} style={styles.preview} contentFit="cover" />
             ) : (
-              <View style={styles.preview}>
-                <Text style={styles.previewVideoText}>🎥 Video seçildi</Text>
-              </View>
+              <Video
+                source={{ uri: imageUri }}
+                style={styles.preview}
+                resizeMode={ResizeMode.CONTAIN}
+                useNativeControls
+                isLooping
+                shouldPlay={false}
+              />
             )}
           </View>
         ) : null}
@@ -275,7 +302,19 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: '#e5e7eb',
   },
-  previewVideoText: { fontSize: 18, color: '#374151', textAlign: 'center', marginTop: '40%' },
+  tagsRow: { marginBottom: 16 },
+  tagsRowContent: { gap: 8, paddingRight: 20 },
+  tagChip: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  tagChipActive: { backgroundColor: 'rgba(184,134,11,0.15)', borderColor: '#b8860b' },
+  tagChipText: { fontSize: 13, fontWeight: '600', color: '#6b7280' },
+  tagChipTextActive: { color: '#b8860b' },
   label: { fontSize: 15, fontWeight: '600', color: '#111827', marginBottom: 8 },
   input: {
     backgroundColor: '#fff',

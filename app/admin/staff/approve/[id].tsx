@@ -47,6 +47,7 @@ const APP_PERMISSIONS = [
   { key: 'gorev_ata', label: 'Görev atama' },
   { key: 'personel_ekle', label: 'Personel ekle' },
   { key: 'raporlar', label: 'Raporlar' },
+  { key: 'tum_sozlesmeler', label: 'Tüm sözleşmeler' },
 ];
 
 export default function ApproveStaffScreen() {
@@ -69,6 +70,7 @@ export default function ApproveStaffScreen() {
     gorev_ata: false,
     personel_ekle: false,
     raporlar: false,
+    tum_sozlesmeler: false,
   });
 
   useEffect(() => {

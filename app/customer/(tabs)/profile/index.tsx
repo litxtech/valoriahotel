@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -10,7 +10,7 @@ import {
   Pressable,
   Dimensions,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
@@ -19,12 +19,17 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuthStore } from '@/stores/authStore';
 import { supabase } from '@/lib/supabase';
 import { uriToArrayBuffer } from '@/lib/uploadMedia';
+import { ensureMediaLibraryPermission } from '@/lib/mediaLibraryPermission';
 import { theme } from '@/constants/theme';
 import { LANGUAGES, LANG_STORAGE_KEY, type LangCode } from '@/i18n';
+import { applyRTLAndReloadIfNeeded } from '@/lib/reloadForRTL';
 import { CachedImage } from '@/components/CachedImage';
+import { getOrCreateGuestForCurrentSession } from '@/lib/getOrCreateGuestForCaller';
+import { listBlockedUsersForGuest, unblockUserForGuest, type BlockedUserItem } from '@/lib/userBlocks';
+import { SharedAppLinks } from '@/components/SharedAppLinks';
 
 const AVATAR_SIZE = 88;
-const COVER_BLOCK_HEIGHT = 240;
+const COVER_BLOCK_HEIGHT = 260;
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 const LANGUAGE_FLAGS: Record<string, string> = {
@@ -71,6 +76,10 @@ export default function CustomerProfile() {
   const [coverModalVisible, setCoverModalVisible] = useState(false);
   const [avatarModalVisible, setAvatarModalVisible] = useState(false);
   const [languageModalVisible, setLanguageModalVisible] = useState(false);
+  const [blockedUsers, setBlockedUsers] = useState<BlockedUserItem[]>([]);
+  const [unblockingId, setUnblockingId] = useState<string | null>(null);
+  const [guestToken, setGuestToken] = useState<{ guest_id: string; app_token: string } | null>(null);
+  const [tokenBusy, setTokenBusy] = useState(false);
 
   useEffect(() => {
     setCoverUri(coverUrl);
@@ -86,16 +95,19 @@ export default function CustomerProfile() {
 
   const pickCover = async () => {
     if (!user) return;
-    const { status: statusCover } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (statusCover !== 'granted') {
-      Alert.alert(t('permission'), t('galleryRequired'));
+    const granted = await ensureMediaLibraryPermission({
+      title: t('permission'),
+      message: t('galleryRequired'),
+      settingsMessage: t('galleryRequired'),
+    });
+    if (!granted) {
       return;
     }
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
-        aspect: [3, 1],
+        aspect: [3, 2],
         quality: 0.7,
       });
       if (result.canceled || !result.assets[0]?.uri) return;
@@ -119,9 +131,12 @@ export default function CustomerProfile() {
 
   const pickAvatar = async () => {
     if (!user) return;
-    const { status: statusAvatar } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (statusAvatar !== 'granted') {
-      Alert.alert(t('permission'), t('galleryRequired'));
+    const granted = await ensureMediaLibraryPermission({
+      title: t('permission'),
+      message: t('galleryRequired'),
+      settingsMessage: t('galleryRequired'),
+    });
+    if (!granted) {
       return;
     }
     try {
@@ -143,6 +158,10 @@ export default function CustomerProfile() {
       const { data: { publicUrl } } = supabase.storage.from('profiles').getPublicUrl(path);
       await saveUserMetadata({ avatar_url: publicUrl });
       setAvatarUri(publicUrl);
+      const guest = await getOrCreateGuestForCurrentSession();
+      if (guest?.guest_id) {
+        await supabase.from('guests').update({ photo_url: publicUrl }).eq('id', guest.guest_id);
+      }
     } catch (e) {
       Alert.alert(t('error'), (e as Error)?.message ?? t('avatarUploadError'));
     } finally {
@@ -168,10 +187,96 @@ export default function CustomerProfile() {
     );
   };
 
-  const handleLanguageSelect = (code: LangCode) => {
+  const handleLanguageSelect = async (code: LangCode) => {
     i18n.changeLanguage(code);
     AsyncStorage.setItem(LANG_STORAGE_KEY, code);
     setLanguageModalVisible(false);
+    await applyRTLAndReloadIfNeeded(code);
+  };
+
+  const loadBlockedUsers = useCallback(async () => {
+    if (!isLoggedIn) {
+      setBlockedUsers([]);
+      return;
+    }
+    const guest = await getOrCreateGuestForCurrentSession();
+    if (!guest?.guest_id) {
+      setBlockedUsers([]);
+      return;
+    }
+    const list = await listBlockedUsersForGuest(guest.guest_id);
+    setBlockedUsers(list);
+  }, [isLoggedIn]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadBlockedUsers();
+      return () => {};
+    }, [loadBlockedUsers])
+  );
+
+  const refreshTokens = useCallback(async () => {
+    if (!isLoggedIn) {
+      setGuestToken(null);
+      return;
+    }
+    setTokenBusy(true);
+    try {
+      const g = await getOrCreateGuestForCurrentSession();
+      setGuestToken(g);
+    } finally {
+      setTokenBusy(false);
+    }
+  }, [isLoggedIn]);
+
+  useFocusEffect(
+    useCallback(() => {
+      refreshTokens();
+      return () => {};
+    }, [refreshTokens])
+  );
+
+  const maskToken = (val: string, visibleStart = 8, visibleEnd = 6) => {
+    const v = String(val || '');
+    if (v.length <= visibleStart + visibleEnd + 3) return v;
+    return `${v.slice(0, visibleStart)}…${v.slice(-visibleEnd)}`;
+  };
+
+  const copyToClipboard = async (label: string, value: string | null) => {
+    if (!value) return;
+    try {
+      const Clipboard = await import('expo-clipboard');
+      await Clipboard.setStringAsync(value);
+      Alert.alert('Kopyalandı', `${label} panoya kopyalandı.`);
+    } catch {
+      Alert.alert(label, value);
+    }
+  };
+
+  const handleUnblock = (item: BlockedUserItem) => {
+    Alert.alert('Engeli kaldır', `${item.name} için engeli kaldırmak istiyor musunuz?`, [
+      { text: 'Vazgeç', style: 'cancel' },
+      {
+        text: 'Kaldır',
+        style: 'destructive',
+        onPress: async () => {
+          const guest = await getOrCreateGuestForCurrentSession();
+          if (!guest?.guest_id) return;
+          setUnblockingId(item.blockId);
+          const { error } = await unblockUserForGuest({
+            blockerGuestId: guest.guest_id,
+            blockedType: item.blockedType,
+            blockedId: item.blockedId,
+          });
+          setUnblockingId(null);
+          if (error) {
+            Alert.alert('Hata', error.message || 'Engel kaldırılamadı.');
+            return;
+          }
+          setBlockedUsers((prev) => prev.filter((x) => x.blockId !== item.blockId));
+        },
+      },
+    ]);
   };
 
   const displayName = getDisplayName(t);
@@ -180,11 +285,7 @@ export default function CustomerProfile() {
   const showAvatarEdit = isLoggedIn;
 
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.content}
-      showsVerticalScrollIndicator={false}
-    >
+    <ScrollView style={styles.container} contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 28 }]} showsVerticalScrollIndicator={false}>
       {/* Kapak sabit yükseklikte; profil resmi kapak alt kenarına sabit, hep aynı yerde. */}
       {showCover ? (
         <View style={styles.coverBlock}>
@@ -212,75 +313,121 @@ export default function CustomerProfile() {
                 <Text style={styles.uploadText}>Yükleniyor</Text>
               </View>
             )}
-            {showAvatarEdit && !uploadingCover && (
-              <TouchableOpacity style={styles.coverCameraBtn} onPress={pickCover} activeOpacity={0.9}>
-                <Ionicons name="camera" size={20} color={theme.colors.white} />
-              </TouchableOpacity>
-            )}
           </View>
-          {/* Avatar — kapak alt kenarına sabit */}
-          <View style={styles.avatarOnCover}>
+          {showAvatarEdit && !uploadingCover && (
             <TouchableOpacity
-              style={styles.avatarWrap}
-              onPress={() => {
-                if (uploadingAvatar) return;
-                if (avatarUri) setAvatarModalVisible(true);
-                else if (isLoggedIn) pickAvatar();
-              }}
-              activeOpacity={0.95}
-              disabled={!isLoggedIn && !avatarUri}
+              style={styles.coverCameraBtn}
+              onPress={pickCover}
+              activeOpacity={0.9}
             >
-              {avatarUri ? (
-                <CachedImage uri={avatarUri} style={styles.avatarImage} contentFit="cover" />
-              ) : (
-                <View style={styles.avatarPlaceholder}>
-                  <Text style={styles.avatarText}>{displayName.charAt(0).toUpperCase()}</Text>
-                </View>
-              )}
-              {uploadingAvatar && (
-                <View style={styles.avatarUploadOverlay}>
-                  <Text style={styles.uploadText}>Yükleniyor</Text>
-                </View>
-              )}
-              {showAvatarEdit && !uploadingAvatar && (
-                <TouchableOpacity
-                  style={styles.avatarCameraBtn}
-                  onPress={(e) => { e?.stopPropagation?.(); pickAvatar(); }}
-                  activeOpacity={0.9}
-                >
-                  <Ionicons name="camera" size={18} color={theme.colors.white} />
-                </TouchableOpacity>
-              )}
+              <Ionicons name="camera" size={20} color={theme.colors.white} />
             </TouchableOpacity>
-          </View>
+          )}
         </View>
       ) : (
-        <View style={styles.headerNoCover}>
-          <View style={styles.avatarWrap}>
-            <View style={styles.avatarPlaceholder}>
-              <Text style={styles.avatarText}>{displayName.charAt(0).toUpperCase()}</Text>
+        <View style={[styles.profileHeaderRow, styles.profileHeaderRowNoCover]}>
+          <View style={styles.avatarWrapSmall}>
+            <View style={[styles.avatarPlaceholder, styles.avatarPlaceholderSmall]}>
+              <Text style={styles.avatarTextSmall}>{displayName.charAt(0).toUpperCase()}</Text>
             </View>
           </View>
-          <Text style={styles.name}>{displayName}</Text>
-          {displayEmail ? (
-            <Text style={styles.email}>{displayEmail}</Text>
-          ) : (
-            <Text style={styles.subtitle}>Giriş yaparak rezervasyon ve mesajlarınıza erişin.</Text>
-          )}
+          <View style={styles.header}>
+            <Text style={styles.name}>{displayName}</Text>
+            {displayEmail ? (
+              <Text style={styles.email}>{displayEmail}</Text>
+            ) : (
+              <Text style={styles.subtitle}>Giriş yaparak rezervasyon ve mesajlarınıza erişin.</Text>
+            )}
+          </View>
         </View>
       )}
 
-      {/* İsim / email — kapak bloğunun altında (avatar varsa avatarın altından sonra) */}
+      {/* Avatar + İsim — yan yana, ortalanmış */}
       {showCover && (
-        <View style={styles.header}>
-          <Text style={styles.name}>{displayName}</Text>
-          {displayEmail ? (
-            <Text style={styles.email}>{displayEmail}</Text>
-          ) : (
-            <Text style={styles.subtitle}>Giriş yaparak rezervasyon ve mesajlarınıza erişin.</Text>
-          )}
+        <View style={styles.profileHeaderRow}>
+          <TouchableOpacity
+            style={styles.avatarWrapSmall}
+            onPress={() => {
+              if (uploadingAvatar) return;
+              if (avatarUri) setAvatarModalVisible(true);
+              else if (isLoggedIn) pickAvatar();
+            }}
+            activeOpacity={0.95}
+            disabled={!isLoggedIn && !avatarUri}
+          >
+            {avatarUri ? (
+              <CachedImage uri={avatarUri} style={styles.avatarImageSmall} contentFit="cover" />
+            ) : (
+              <View style={[styles.avatarPlaceholder, styles.avatarPlaceholderSmall]}>
+                <Text style={styles.avatarTextSmall}>{displayName.charAt(0).toUpperCase()}</Text>
+              </View>
+            )}
+            {uploadingAvatar && (
+              <View style={[styles.avatarUploadOverlay, styles.avatarUploadOverlaySmall]}>
+                <Text style={styles.uploadText}>Yükleniyor</Text>
+              </View>
+            )}
+            {showAvatarEdit && !uploadingAvatar && (
+              <TouchableOpacity
+                style={[styles.avatarCameraBtn, styles.avatarCameraBtnSmall]}
+                onPress={(e) => { e?.stopPropagation?.(); pickAvatar(); }}
+                activeOpacity={0.9}
+              >
+                <Ionicons name="camera" size={14} color={theme.colors.white} />
+              </TouchableOpacity>
+            )}
+          </TouchableOpacity>
+          <View style={styles.header}>
+            <Text style={styles.name}>{displayName}</Text>
+            {displayEmail ? (
+              <Text style={styles.email}>{displayEmail}</Text>
+            ) : (
+              <Text style={styles.subtitle}>Giriş yaparak rezervasyon ve mesajlarınıza erişin.</Text>
+            )}
+          </View>
         </View>
       )}
+
+      {isLoggedIn && (
+        <View style={[styles.section, styles.sectionTight]}>
+          <View style={styles.sectionTitleRow}>
+            <View style={styles.tokenSectionHeader}>
+              <View style={styles.tokenLiveBadge}>
+                <View style={styles.tokenLiveDot} />
+                <Text style={styles.tokenLiveText}>Canlı token</Text>
+              </View>
+              <Text style={styles.sectionTitleNew}>Kimlik Token</Text>
+            </View>
+            <TouchableOpacity onPress={refreshTokens} activeOpacity={0.8} style={styles.sectionActionBtn} disabled={tokenBusy}>
+              <Ionicons name="refresh-outline" size={18} color={theme.colors.primary} />
+              <Text style={styles.sectionActionText}>{tokenBusy ? '...' : 'Yenile'}</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.tokenCard}>
+            <View style={styles.tokenRow}>
+              <View style={styles.tokenLeft}>
+                <Text style={styles.tokenLabel}>Kimlik Token</Text>
+                <Text style={styles.tokenValue}>{guestToken?.app_token ? maskToken(guestToken.app_token, 10, 8) : '—'}</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.tokenCopyBtn}
+                onPress={() => copyToClipboard('Kimlik Token', guestToken?.app_token ?? null)}
+                activeOpacity={0.85}
+                disabled={!guestToken?.app_token}
+              >
+                <Ionicons name="copy-outline" size={18} color={theme.colors.primary} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.tokenHint}>
+              Bu bilgi canlıdır. Oturum değişirse veya yeni token alınırsa otomatik güncellenir.
+            </Text>
+          </View>
+        </View>
+      )}
+
+      <SharedAppLinks compact />
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Hesap</Text>
@@ -320,6 +467,16 @@ export default function CustomerProfile() {
           </View>
           <Ionicons name="chevron-forward" size={20} color={theme.colors.textMuted} style={styles.menuChevron} />
         </TouchableOpacity>
+        <TouchableOpacity style={styles.menuCard} onPress={() => router.push('/customer/carbon')} activeOpacity={0.7}>
+          <View style={styles.menuIconWrap}>
+            <Ionicons name="leaf-outline" size={20} color={theme.colors.primary} />
+          </View>
+          <View style={styles.menuTextWrap}>
+            <Text style={styles.menuLabel}>Karbon ayak izim</Text>
+            <Text style={styles.menuSublabel}>Konaklamanız için otomatik hesaplanır</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={theme.colors.textMuted} style={styles.menuChevron} />
+        </TouchableOpacity>
         <TouchableOpacity style={styles.menuCard} onPress={() => router.push('/customer/emergency')} activeOpacity={0.7}>
           <View style={[styles.menuIconWrap, styles.menuIconWrapDanger]}>
             <Ionicons name="alert-circle-outline" size={20} color={theme.colors.error} />
@@ -330,6 +487,39 @@ export default function CustomerProfile() {
           <Ionicons name="chevron-forward" size={20} color={theme.colors.textMuted} style={styles.menuChevron} />
         </TouchableOpacity>
       </View>
+
+      {isLoggedIn && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Engellenenler</Text>
+          {blockedUsers.length === 0 ? (
+            <Text style={styles.menuSublabel}>Engellediğiniz kullanıcı yok.</Text>
+          ) : (
+            blockedUsers.map((item) => (
+              <View key={item.blockId} style={styles.menuCard}>
+                <View style={[styles.menuIconWrap, styles.menuIconWrapDanger]}>
+                  <Ionicons name="ban-outline" size={20} color={theme.colors.error} />
+                </View>
+                <View style={styles.menuTextWrap}>
+                  <Text style={styles.menuLabel}>{item.name}</Text>
+                  <Text style={styles.menuSublabel}>{item.subtitle ?? 'Kullanıcı'}</Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => handleUnblock(item)}
+                  disabled={unblockingId === item.blockId}
+                  style={styles.unblockBtn}
+                  activeOpacity={0.8}
+                >
+                  {unblockingId === item.blockId ? (
+                    <Text style={styles.unblockBtnText}>...</Text>
+                  ) : (
+                    <Text style={styles.unblockBtnText}>Kaldır</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            ))
+          )}
+        </View>
+      )}
 
       {isLoggedIn && (
         <View style={styles.section}>
@@ -388,9 +578,11 @@ export default function CustomerProfile() {
       </View>
 
       {isLoggedIn && (
-        <View style={styles.section}>
+        <View style={styles.signOutSection}>
           <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut} activeOpacity={0.85}>
-            <Ionicons name="log-out-outline" size={20} color={theme.colors.error} style={{ marginRight: 8 }} />
+            <View style={styles.signOutIconWrap}>
+              <Ionicons name="log-out-outline" size={22} color={theme.colors.error} />
+            </View>
             <Text style={styles.signOutButtonText}>{t('signOut')}</Text>
           </TouchableOpacity>
         </View>
@@ -433,7 +625,7 @@ export default function CustomerProfile() {
                 <Ionicons name="globe-outline" size={32} color={theme.colors.primary} />
               </View>
               <Text style={styles.langModalTitle}>{t('selectLanguage')}</Text>
-              <Text style={styles.langModalSubtitle}>Uygulama dilinizi aşağıdan seçin</Text>
+              <Text style={styles.langModalSubtitle}>{t('selectAppLanguage')}</Text>
             </View>
             <ScrollView
               style={styles.langScrollView}
@@ -530,21 +722,29 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center',
     alignItems: 'center',
+    zIndex: 20,
   },
   uploadText: { color: theme.colors.white, fontSize: 12 },
-  avatarOnCover: {
-    position: 'absolute',
-    bottom: -AVATAR_SIZE / 2 + 55,
-    left: 0,
-    right: 0,
+  profileHeaderRow: {
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 16,
+    paddingVertical: 20,
+    paddingHorizontal: theme.spacing.lg,
+    backgroundColor: theme.colors.surface,
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: theme.spacing.md,
+    borderRadius: 20,
+    ...theme.shadows.sm,
   },
+  profileHeaderRowNoCover: { marginTop: 16 },
   header: {
     alignItems: 'center',
-    paddingTop: AVATAR_SIZE / 2 + 12,
-    paddingHorizontal: theme.spacing.lg,
-    paddingBottom: theme.spacing.lg,
-    marginBottom: theme.spacing.md,
+    paddingTop: 0,
+    paddingHorizontal: 8,
+    paddingBottom: 0,
   },
   headerNoCover: {
     alignItems: 'center',
@@ -598,7 +798,24 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.surface,
     ...theme.shadows.sm,
   },
-  name: { ...theme.typography.title, color: theme.colors.text, marginBottom: 4 },
+  avatarWrapSmall: { position: 'relative' },
+  avatarImageSmall: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    borderWidth: 2,
+    borderColor: theme.colors.borderLight,
+  },
+  avatarPlaceholderSmall: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    borderWidth: 2,
+  },
+  avatarTextSmall: { fontSize: 24, fontWeight: '700', color: theme.colors.white },
+  avatarUploadOverlaySmall: { borderRadius: 32 },
+  avatarCameraBtnSmall: { width: 28, height: 28, borderRadius: 14 },
+  name: { ...theme.typography.title, color: theme.colors.text, marginBottom: 4, textAlign: 'center' },
   email: { ...theme.typography.bodySmall, color: theme.colors.textSecondary },
   subtitle: { ...theme.typography.bodySmall, color: theme.colors.textSecondary },
   section: {
@@ -609,6 +826,65 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing.lg,
     ...theme.shadows.sm,
   },
+  sectionTight: {
+    paddingBottom: 14,
+  },
+  sectionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    paddingTop: 14,
+    marginBottom: 12,
+  },
+  tokenSectionHeader: { flex: 1 },
+  tokenLiveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: theme.colors.success + '18',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    marginBottom: 6,
+  },
+  tokenLiveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: theme.colors.success,
+    marginRight: 6,
+  },
+  tokenLiveText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: theme.colors.success,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  sectionTitleNew: {
+    ...theme.typography.bodySmall,
+    fontWeight: '600',
+    color: theme.colors.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  sectionActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: theme.colors.backgroundSecondary,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
+  sectionActionText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: theme.colors.primary,
+  },
   sectionTitle: {
     ...theme.typography.bodySmall,
     fontWeight: '600',
@@ -617,6 +893,53 @@ const styles = StyleSheet.create({
     paddingTop: 14,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
+  },
+  tokenCard: {
+    borderRadius: 16,
+    backgroundColor: theme.colors.backgroundSecondary,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    padding: 12,
+  },
+  tokenRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    paddingVertical: 10,
+  },
+  tokenLeft: { flex: 1, minWidth: 0 },
+  tokenLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: theme.colors.textMuted,
+    marginBottom: 4,
+  },
+  tokenValue: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: theme.colors.text,
+  },
+  tokenCopyBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.primaryLight + '1A',
+    borderWidth: 1,
+    borderColor: theme.colors.primaryLight + '2A',
+  },
+  tokenDivider: {
+    height: 1,
+    backgroundColor: theme.colors.border,
+    opacity: 0.9,
+  },
+  tokenHint: {
+    marginTop: 10,
+    fontSize: 12,
+    color: theme.colors.textMuted,
+    lineHeight: 17,
   },
   menuCard: {
     flexDirection: 'row',
@@ -644,21 +967,45 @@ const styles = StyleSheet.create({
   menuLabel: { fontSize: 16, fontWeight: '600', color: theme.colors.text },
   menuSublabel: { fontSize: 13, color: theme.colors.textSecondary, marginTop: 2 },
   menuChevron: { marginLeft: 8 },
+  unblockBtn: {
+    backgroundColor: theme.colors.error + '18',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  unblockBtnText: { color: theme.colors.error, fontWeight: '700', fontSize: 13 },
   signOutText: { color: theme.colors.error, fontWeight: '600' },
+  signOutSection: {
+    marginHorizontal: theme.spacing.lg,
+    marginTop: 8,
+    marginBottom: theme.spacing.xl,
+  },
   signOutButton: {
     flexDirection: 'row',
-    marginTop: theme.spacing.sm,
-    paddingVertical: 16,
-    paddingHorizontal: theme.spacing.lg,
-    borderRadius: theme.radius.lg,
-    borderWidth: 2,
-    borderColor: theme.colors.error,
-    backgroundColor: theme.colors.error + '12',
     alignItems: 'center',
     justifyContent: 'center',
-    ...theme.shadows.sm,
+    paddingVertical: 18,
+    paddingHorizontal: theme.spacing.xl,
+    borderRadius: 16,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 2,
+    borderColor: theme.colors.error,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3,
   },
-  signOutButtonText: { fontSize: 16, fontWeight: '700', color: theme.colors.error },
+  signOutIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: theme.colors.error + '15',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 14,
+  },
+  signOutButtonText: { fontSize: 17, fontWeight: '700', color: theme.colors.error },
   primaryMenuCard: {
     flexDirection: 'row',
     alignItems: 'center',

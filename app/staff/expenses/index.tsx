@@ -8,7 +8,8 @@ import {
   RefreshControl,
   ActivityIndicator,
   Alert,
-  Linking,
+  Modal,
+  Pressable,
   Platform,
 } from 'react-native';
 import { useRouter } from 'expo-router';
@@ -27,6 +28,7 @@ type ExpenseRow = {
   receipt_image_url: string | null;
   status: string;
   expense_date: string;
+  rejection_reason: string | null;
   category: { name: string } | null;
 };
 
@@ -46,6 +48,7 @@ export default function StaffExpensesScreen() {
     pendingCount: number;
     pendingAmount: number;
   }>({ thisMonth: 0, lastMonth: 0, pendingCount: 0, pendingAmount: 0 });
+  const [receiptModal, setReceiptModal] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!staff?.id) return;
@@ -56,7 +59,7 @@ export default function StaffExpensesScreen() {
 
     const { data: list } = await supabase
       .from('staff_expenses')
-      .select('id, amount, description, receipt_image_url, status, expense_date, category:category_id(name)')
+      .select('id, amount, description, receipt_image_url, status, expense_date, rejection_reason, category:category_id(name)')
       .eq('staff_id', staff.id)
       .order('expense_date', { ascending: false })
       .order('created_at', { ascending: false })
@@ -84,6 +87,19 @@ export default function StaffExpensesScreen() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (!staff?.id) return;
+    const channel = supabase
+      .channel('staff-expenses-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'staff_expenses', filter: `staff_id=eq.${staff.id}` }, () => {
+        load();
+      })
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [staff?.id, load]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -160,12 +176,15 @@ export default function StaffExpensesScreen() {
                     <Text style={[styles.statusText, e.status === 'approved' && styles.statusApproved, e.status === 'rejected' && styles.statusRejected]}>{statusLabel(e.status)}</Text>
                   </View>
                 </View>
+                {e.status === 'rejected' && e.rejection_reason ? (
+                  <Text style={styles.rejectionReason}>{e.rejection_reason}</Text>
+                ) : null}
                 <Text style={styles.cardCategory}>{e.category?.name ?? '—'}</Text>
                 {e.description ? <Text style={styles.cardDesc} numberOfLines={2}>{e.description}</Text> : null}
                 <View style={styles.cardFooter}>
                   <Text style={styles.cardAmount}>{fmtMoney(Number(e.amount))}</Text>
                   {e.receipt_image_url ? (
-                    <TouchableOpacity onPress={() => e.receipt_image_url && Linking.openURL(e.receipt_image_url)} style={styles.receiptBtn}>
+                    <TouchableOpacity onPress={() => setReceiptModal(e.receipt_image_url)} style={styles.receiptBtn}>
                       <Ionicons name="image-outline" size={20} color={theme.colors.primary} />
                       <Text style={styles.receiptBtnText}>Fiş gör</Text>
                     </TouchableOpacity>
@@ -185,6 +204,19 @@ export default function StaffExpensesScreen() {
           </View>
         )}
       </ScrollView>
+
+      <Modal visible={!!receiptModal} transparent animationType="fade">
+        <Pressable style={styles.modalOverlay} onPress={() => setReceiptModal(null)}>
+          <View style={styles.modalContent}>
+            {receiptModal ? (
+              <CachedImage uri={receiptModal} style={styles.modalImage} contentFit="contain" />
+            ) : null}
+            <TouchableOpacity style={styles.modalClose} onPress={() => setReceiptModal(null)}>
+              <Text style={styles.modalCloseText}>Kapat</Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -235,6 +267,7 @@ const styles = StyleSheet.create({
   statusText: { fontSize: 12, color: theme.colors.primary },
   statusApproved: { color: theme.colors.success },
   statusRejected: { color: theme.colors.error },
+  rejectionReason: { fontSize: 12, color: theme.colors.error, marginTop: 4, fontStyle: 'italic' },
   cardCategory: { fontSize: 15, fontWeight: '600', color: theme.colors.text },
   cardDesc: { fontSize: 13, color: theme.colors.textSecondary, marginTop: 4 },
   cardFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: theme.colors.borderLight },
@@ -244,4 +277,9 @@ const styles = StyleSheet.create({
   exportRow: { marginTop: 20, flexDirection: 'row', justifyContent: 'center' },
   exportBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10, paddingHorizontal: 16 },
   exportBtnText: { fontSize: 14, color: theme.colors.primary, fontWeight: '600' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  modalContent: { width: '100%', maxHeight: '85%', alignItems: 'center' },
+  modalImage: { width: '100%', height: 400, borderRadius: 8 },
+  modalClose: { marginTop: 16, paddingVertical: 10, paddingHorizontal: 24, backgroundColor: theme.colors.surface, borderRadius: 8 },
+  modalCloseText: { fontSize: 16, fontWeight: '600', color: theme.colors.text },
 });

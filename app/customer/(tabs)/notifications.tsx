@@ -7,6 +7,8 @@ import {
   RefreshControl,
   TouchableOpacity,
   ActivityIndicator,
+  Alert,
+  Linking,
 } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,7 +16,7 @@ import { supabase } from '@/lib/supabase';
 import { getOrCreateGuestForCaller } from '@/lib/getOrCreateGuestForCaller';
 import { getGuestNotificationToken, setGuestNotificationToken } from '@/lib/guestNotificationToken';
 import { GUEST_PREF_KEYS } from '@/lib/notifications';
-import { getExpoPushTokenAsync, savePushTokenForGuest } from '@/lib/notificationsPush';
+import { getExpoPushTokenAsync, savePushTokenForGuest, isExpoGo } from '@/lib/notificationsPush';
 import { useGuestNotificationStore } from '@/stores/guestNotificationStore';
 import { useGuestMessagingStore } from '@/stores/guestMessagingStore';
 import { useAuthStore } from '@/stores/authStore';
@@ -45,6 +47,8 @@ export default function CustomerNotificationsScreen() {
   const [prefs, setPrefs] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [prefsLoaded, setPrefsLoaded] = useState(false);
+  const [pushPerm, setPushPerm] = useState<'granted' | 'denied' | 'undetermined' | 'unknown'>('unknown');
+  const [enablingPush, setEnablingPush] = useState(false);
 
   const { refresh: refreshNotificationCount, setUnreadCount, setNotificationsScreenFocused } = useGuestNotificationStore();
 
@@ -52,12 +56,22 @@ export default function CustomerNotificationsScreen() {
     useCallback(() => {
       setUnreadCount(0);
       setNotificationsScreenFocused(true);
+      load();
       return () => setNotificationsScreenFocused(false);
-    }, [setUnreadCount, setNotificationsScreenFocused])
+    }, [setUnreadCount, setNotificationsScreenFocused, load])
   );
 
   const load = useCallback(async () => {
-    await getExpoPushTokenAsync();
+    // Push iznini burada otomatik isteme: sadece durum kontrol et.
+    if (!isExpoGo) {
+      try {
+        const Notifications = await import('expo-notifications').then((m) => m.default);
+        const { status } = await Notifications.getPermissionsAsync();
+        setPushPerm(status === 'granted' ? 'granted' : status === 'denied' ? 'denied' : 'undetermined');
+      } catch {
+        setPushPerm('unknown');
+      }
+    }
     let t = await getGuestNotificationToken();
     if (!t) {
       const { data: { session: s } } = await supabase.auth.getSession();
@@ -77,10 +91,15 @@ export default function CustomerNotificationsScreen() {
       setLoading(false);
       return;
     }
-    savePushTokenForGuest(t).catch(() => {});
+    // Push token kaydı kullanıcı izni verdikten sonra yapılır (kart aksiyonu ile).
     const { data } = await supabase.rpc('get_guest_notifications', { p_app_token: t });
     const rows = (data as NotifRow[]) ?? [];
-    setList(rows);
+    const unreadIds = rows.filter((n) => !n.read_at).map((n) => n.id);
+    await Promise.all(
+      unreadIds.map((id) => supabase.rpc('mark_guest_notification_read', { p_app_token: t, p_notification_id: id }))
+    );
+    const now = new Date().toISOString();
+    setList(rows.map((n) => (unreadIds.includes(n.id) ? { ...n, read_at: now } : n)));
     useGuestNotificationStore.getState().setUnreadCount(0);
     const { data: prefsData } = await supabase.rpc('get_guest_notification_preferences', { p_app_token: t });
     const map: Record<string, boolean> = {};
@@ -95,6 +114,48 @@ export default function CustomerNotificationsScreen() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const enablePush = useCallback(async () => {
+    if (enablingPush) return;
+    if (isExpoGo) {
+      Alert.alert(
+        'Push bildirimleri desteklenmiyor',
+        'Push bildirimleri Expo Go içinde çalışmaz. Lütfen development build veya yüklenmiş uygulama (App Store / Play Store) ile deneyin.',
+        [{ text: 'Tamam' }]
+      );
+      return;
+    }
+    if (!token) {
+      Alert.alert('Bekleyin', 'Bildirim hesabı hazırlanıyor, lütfen sayfayı yenileyip tekrar deneyin.');
+      return;
+    }
+    setEnablingPush(true);
+    try {
+      const expoPushToken = await getExpoPushTokenAsync();
+      if (expoPushToken) {
+        await savePushTokenForGuest(token);
+        setPushPerm('granted');
+      } else {
+        const Notifications = await import('expo-notifications').then((m) => m.default);
+        const { status } = await Notifications.getPermissionsAsync();
+        setPushPerm(status === 'granted' ? 'granted' : status === 'denied' ? 'denied' : 'undetermined');
+        if (status === 'denied') {
+          Alert.alert(
+            'Bildirim izni reddedildi',
+            'Bildirim almak için lütfen ayarlardan izin verin.',
+            [
+              { text: 'İptal', style: 'cancel' },
+              { text: 'Ayarları aç', onPress: () => Linking.openSettings() },
+            ]
+          );
+        }
+      }
+    } catch (e) {
+      Alert.alert('Hata', 'İzin alınırken bir sorun oluştu. Lütfen tekrar deneyin.');
+    } finally {
+      setEnablingPush(false);
+    }
+  }, [token, enablingPush]);
 
   const handleNotificationPress = useCallback(
     async (n: NotifRow) => {
@@ -184,6 +245,44 @@ export default function CustomerNotificationsScreen() {
       refreshControl={<RefreshControl refreshing={loading} onRefresh={load} />}
     >
       <Text style={styles.title}>Bildirimler</Text>
+      {!isExpoGo && (pushPerm === 'denied' || pushPerm === 'undetermined') && (
+        <View style={styles.pushCard}>
+          <View style={styles.pushCardRow}>
+            <Ionicons name="notifications-outline" size={20} color={theme.colors.primary} />
+            <Text style={styles.pushCardTitle}>Bildirim izni gerekli</Text>
+          </View>
+          <Text style={styles.pushCardDesc}>
+            {pushPerm === 'denied'
+              ? 'Bildirim izni daha önce reddedildi. Ayarlardan izin verebilirsiniz.'
+              : 'Duyurular ve hatırlatmalar için bildirim izni verin. İzni istemek için butona dokunun.'}
+          </Text>
+          <View style={styles.pushCardBtnRow}>
+            <TouchableOpacity
+              style={[styles.pushCardBtn, enablingPush && styles.pushCardBtnDisabled]}
+              onPress={enablePush}
+              disabled={enablingPush}
+              activeOpacity={0.8}
+            >
+              {enablingPush ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={styles.pushCardBtnText}>
+                  {pushPerm === 'denied' ? 'Tekrar iste' : 'Bildirim izni ver'}
+                </Text>
+              )}
+            </TouchableOpacity>
+            {pushPerm === 'denied' && (
+              <TouchableOpacity
+                style={styles.pushCardBtnSecondary}
+                onPress={() => Linking.openSettings()}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.pushCardBtnSecondaryText}>Ayarları aç</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      )}
       {list.length === 0 && !loading ? (
         <Text style={styles.noList}>Henüz bildirim yok.</Text>
       ) : (
@@ -230,6 +329,35 @@ const styles = StyleSheet.create({
   centered: { justifyContent: 'center', alignItems: 'center' },
   content: { padding: 20, paddingBottom: 40 },
   title: { fontSize: 20, fontWeight: '700', color: theme.colors.text, marginBottom: 16 },
+  pushCard: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.colors.borderLight,
+    padding: 14,
+    marginBottom: 14,
+  },
+  pushCardRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  pushCardTitle: { fontSize: 15, fontWeight: '700', color: theme.colors.text },
+  pushCardDesc: { fontSize: 13, color: theme.colors.textSecondary, lineHeight: 18 },
+  pushCardBtnRow: { marginTop: 12, gap: 10 },
+  pushCardBtn: {
+    backgroundColor: theme.colors.primary,
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  pushCardBtnDisabled: { opacity: 0.7 },
+  pushCardBtnText: { color: '#fff', fontWeight: '700' },
+  pushCardBtnSecondary: {
+    marginTop: 6,
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: theme.colors.primary,
+  },
+  pushCardBtnSecondaryText: { color: theme.colors.primary, fontWeight: '600' },
   emptyCard: {
     backgroundColor: theme.colors.surface,
     padding: 24,

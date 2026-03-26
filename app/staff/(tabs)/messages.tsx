@@ -7,14 +7,17 @@ import {
   RefreshControl,
   ActivityIndicator,
   Pressable,
+  Alert,
 } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@/stores/authStore';
 import { useStaffUnreadMessagesStore } from '@/stores/staffUnreadMessagesStore';
-import { staffListConversations, subscribeToConversationList } from '@/lib/messagingApi';
+import { staffDeleteConversation, staffListConversations, subscribeToConversationList, staffSetConversationMuted } from '@/lib/messagingApi';
 import type { ConversationWithMeta } from '@/lib/messaging';
 import { theme } from '@/constants/theme';
+import { CachedImage } from '@/components/CachedImage';
+import { SwipeToDelete } from '@/components/SwipeToDelete';
 
 const ALL_STAFF_GROUP_NAME = 'Tüm Çalışanlar';
 
@@ -30,51 +33,79 @@ function formatTime(iso: string | null): string {
 function ConversationRow({
   item,
   onPress,
+  onMutePress,
+  onDelete,
+  staffId,
 }: {
   item: ConversationWithMeta;
   onPress: () => void;
+  onMutePress?: () => void;
+  onDelete?: () => void;
+  staffId?: string;
 }) {
   const unread = item.unread_count ?? 0;
   const isAllStaff = item.type === 'group' && item.name === ALL_STAFF_GROUP_NAME;
   const displayName = item.name || 'Sohbet';
+  const isMuted = item.is_muted ?? false;
 
   return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
-      android_ripple={{ color: theme.colors.borderLight }}
-    >
-      <View style={[styles.avatarWrap, isAllStaff && styles.avatarWrapGroup]}>
-        {isAllStaff ? (
-          <View style={styles.avatarGroup}>
-            <Ionicons name="people" size={24} color={theme.colors.white} />
+    <SwipeToDelete onSwipeDelete={() => onDelete?.()}>
+      <Pressable
+        onPress={onPress}
+        style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+        android_ripple={{ color: theme.colors.borderLight }}
+      >
+        <View style={[styles.avatarWrap, isAllStaff && styles.avatarWrapGroup]}>
+          {isAllStaff ? (
+            <View style={styles.avatarGroup}>
+              <Ionicons name="people" size={24} color={theme.colors.white} />
+            </View>
+          ) : (item.type === 'direct' ? item.other_avatar : item.avatar) ? (
+            <CachedImage
+              uri={(item.type === 'direct' ? item.other_avatar : item.avatar) as string}
+              style={styles.avatarImg}
+              contentFit="cover"
+            />
+          ) : (
+            <Text style={styles.avatarText} numberOfLines={1}>
+              {displayName.charAt(0).toUpperCase()}
+            </Text>
+          )}
+        </View>
+        <View style={styles.rowBody}>
+          <View style={styles.rowTitleRow}>
+            <Text style={styles.rowTitle} numberOfLines={1}>
+              {displayName}
+            </Text>
+            <Text style={styles.rowTime}>{formatTime(item.last_message_at ?? null)}</Text>
           </View>
-        ) : (
-          <Text style={styles.avatarText} numberOfLines={1}>
-            {displayName.charAt(0).toUpperCase()}
+          <Text
+            style={[styles.rowPreview, unread > 0 && styles.rowPreviewUnread]}
+            numberOfLines={1}
+          >
+            {item.last_message_preview || 'Henüz mesaj yok'}
           </Text>
+        </View>
+        {isAllStaff && staffId && onMutePress ? (
+          <Pressable
+            onPress={(e) => { e.stopPropagation(); onMutePress(); }}
+            style={styles.muteBtn}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <Ionicons
+              name={isMuted ? 'notifications-off' : 'notifications'}
+              size={22}
+              color={isMuted ? theme.colors.textMuted : theme.colors.primary}
+            />
+          </Pressable>
+        ) : null}
+        {unread > 0 && (
+          <View style={styles.badge}>
+            <Text style={styles.badgeText}>{unread > 99 ? '99+' : unread}</Text>
+          </View>
         )}
-      </View>
-      <View style={styles.rowBody}>
-        <View style={styles.rowTitleRow}>
-          <Text style={styles.rowTitle} numberOfLines={1}>
-            {displayName}
-          </Text>
-          <Text style={styles.rowTime}>{formatTime(item.last_message_at ?? null)}</Text>
-        </View>
-        <Text
-          style={[styles.rowPreview, unread > 0 && styles.rowPreviewUnread]}
-          numberOfLines={1}
-        >
-          {item.last_message_preview || 'Henüz mesaj yok'}
-        </Text>
-      </View>
-      {unread > 0 && (
-        <View style={styles.badge}>
-          <Text style={styles.badgeText}>{unread > 99 ? '99+' : unread}</Text>
-        </View>
-      )}
-    </Pressable>
+      </Pressable>
+    </SwipeToDelete>
   );
 }
 
@@ -114,6 +145,26 @@ export default function StaffMessagesTabScreen() {
     return () => sub.unsubscribe?.();
   }, [staff?.id, load]);
 
+  const handleDeleteConversation = (item: ConversationWithMeta) => {
+    if (!staff?.id) return;
+    const name = item.name || 'Sohbet';
+    Alert.alert('Sohbeti sil', `"${name}" sohbetini listenizden kaldırmak istiyor musunuz?`, [
+      { text: 'İptal', style: 'cancel' },
+      {
+        text: 'Sil',
+        style: 'destructive',
+        onPress: async () => {
+          const { error } = await staffDeleteConversation(item.id, staff.id);
+          if (error) {
+            Alert.alert('Hata', error);
+            return;
+          }
+          setConversations((prev) => prev.filter((c) => c.id !== item.id));
+        },
+      },
+    ]);
+  };
+
   if (!staff) return null;
 
   const allStaffConv = conversations.find((c) => c.type === 'group' && c.name === ALL_STAFF_GROUP_NAME);
@@ -133,6 +184,63 @@ export default function StaffMessagesTabScreen() {
     </View>
   );
 
+  const openAllStaffChat = () => {
+    if (!allStaffConv) {
+      Alert.alert('Bilgi', 'Ekip sohbeti henüz oluşturulmamış.');
+      return;
+    }
+    router.push({ pathname: '/staff/chat/[id]', params: { id: allStaffConv.id } });
+  };
+
+  const openGroupEdit = () => {
+    if (!allStaffConv) {
+      Alert.alert('Bilgi', 'Düzenlenecek ekip grubu bulunamadı.');
+      return;
+    }
+    // Staff chat içinde admin'lere grup ayarlarını aç (admin layout'a geçiş bazı cihazlarda redirect tetikleyebiliyor).
+    router.push({ pathname: '/staff/chat/[id]', params: { id: allStaffConv.id, openGroupSettings: '1' } });
+  };
+
+  const isAdmin = staff?.role === 'admin';
+
+  const renderHeaderActions = () => (
+    <>
+      <Pressable
+        onPress={() => router.push('/staff/new-chat')}
+        style={({ pressed }) => [styles.newMessageBtn, pressed && { opacity: 0.92 }]}
+        android_ripple={{ color: theme.colors.borderLight }}
+      >
+        <Ionicons name="create-outline" size={18} color={theme.colors.white} />
+        <Text style={styles.newMessageBtnText}>Yeni mesaj</Text>
+      </Pressable>
+      {isAdmin && (
+        <View style={styles.adminTools}>
+          <Pressable
+            onPress={openAllStaffChat}
+            style={({ pressed }) => [styles.adminToolBtn, pressed && styles.adminToolBtnPressed]}
+          >
+            <Ionicons name="people-outline" size={16} color={theme.colors.primary} />
+            <Text style={styles.adminToolBtnText}>Ekip sohbeti</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => router.push('/staff/new-group')}
+            style={({ pressed }) => [styles.adminToolBtn, pressed && styles.adminToolBtnPressed]}
+          >
+            <Ionicons name="add-circle-outline" size={16} color={theme.colors.primary} />
+            <Text style={styles.adminToolBtnText}>Grup oluştur</Text>
+          </Pressable>
+          <Pressable
+            onPress={openGroupEdit}
+            style={({ pressed }) => [styles.adminToolBtn, pressed && styles.adminToolBtnPressed]}
+          >
+            <Ionicons name="create-outline" size={16} color={theme.colors.primary} />
+            <Text style={styles.adminToolBtnText}>Grup düzenle / isim ver</Text>
+          </Pressable>
+        </View>
+      )}
+    </>
+  );
+
   return (
     <View style={styles.container}>
       {loading && conversations.length === 0 ? (
@@ -147,29 +255,13 @@ export default function StaffMessagesTabScreen() {
           </View>
           <Text style={styles.emptyTitle}>Henüz sohbet yok</Text>
           <Text style={styles.emptyText}>Misafirler veya ekip arkadaşlarınızla mesajlaşmaya başlayın.</Text>
-          <Pressable
-            onPress={() => router.push('/staff/new-chat')}
-            style={({ pressed }) => [styles.newMessageBtn, pressed && { opacity: 0.92 }]}
-            android_ripple={{ color: theme.colors.borderLight }}
-          >
-            <Ionicons name="create-outline" size={18} color={theme.colors.white} />
-            <Text style={styles.newMessageBtnText}>Yeni mesaj</Text>
-          </Pressable>
+          {renderHeaderActions()}
         </View>
       ) : (
         <SectionList
           sections={sections}
           keyExtractor={(item) => item.id}
-          ListHeaderComponent={
-            <Pressable
-              onPress={() => router.push('/staff/new-chat')}
-              style={({ pressed }) => [styles.newMessageBtn, pressed && { opacity: 0.92 }]}
-              android_ripple={{ color: theme.colors.borderLight }}
-            >
-              <Ionicons name="create-outline" size={18} color={theme.colors.white} />
-              <Text style={styles.newMessageBtnText}>Yeni mesaj</Text>
-            </Pressable>
-          }
+          ListHeaderComponent={renderHeaderActions()}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -185,7 +277,18 @@ export default function StaffMessagesTabScreen() {
           renderItem={({ item }) => (
             <ConversationRow
               item={item}
+              staffId={staff?.id}
               onPress={() => router.push({ pathname: '/staff/chat/[id]', params: { id: item.id } })}
+              onDelete={() => handleDeleteConversation(item)}
+              onMutePress={
+                item.type === 'group' && item.name === ALL_STAFF_GROUP_NAME && staff
+                  ? async () => {
+                      const next = !(item.is_muted ?? false);
+                      await staffSetConversationMuted(item.id, staff.id, next);
+                      load();
+                    }
+                  : undefined
+              }
             />
           )}
         />
@@ -235,6 +338,31 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 0.2,
   },
+  adminTools: {
+    marginHorizontal: theme.spacing.lg,
+    marginTop: 4,
+    marginBottom: theme.spacing.sm,
+    gap: 8,
+  },
+  adminToolBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.borderLight,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  adminToolBtnPressed: {
+    opacity: 0.9,
+  },
+  adminToolBtnText: {
+    color: theme.colors.primary,
+    fontWeight: '700',
+    fontSize: 13,
+  },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -272,6 +400,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 14,
+    overflow: 'hidden',
+  },
+  avatarImg: {
+    width: 52,
+    height: 52,
   },
   avatarWrapGroup: {
     backgroundColor: theme.colors.primaryDark,
@@ -331,6 +464,12 @@ const styles = StyleSheet.create({
     color: theme.colors.white,
     fontSize: 12,
     fontWeight: '700',
+  },
+  muteBtn: {
+    padding: 8,
+    marginLeft: 4,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   empty: {
     flex: 1,

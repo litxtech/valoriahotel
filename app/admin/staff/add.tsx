@@ -45,6 +45,7 @@ const APP_PERMISSIONS = [
   { key: 'gorev_ata', label: 'Görev atayabilir' },
   { key: 'personel_ekle', label: 'Personel ekleyebilir (sadece yönetici)' },
   { key: 'raporlar', label: 'Raporları görebilir' },
+  { key: 'tum_sozlesmeler', label: 'Tüm sözleşmeleri görüntüleyebilir' },
 ];
 
 const DAYS = [
@@ -90,6 +91,7 @@ export default function AddStaffScreen() {
     gorev_ata: true,
     personel_ekle: false,
     raporlar: false,
+    tum_sozlesmeler: false,
   });
   const [notes, setNotes] = useState('');
 

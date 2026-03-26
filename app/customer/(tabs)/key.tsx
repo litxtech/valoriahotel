@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal, Alert, TextInput, ActivityIndicator, Platform } from 'react-native';
 import * as Linking from 'expo-linking';
 import * as FileSystem from 'expo-file-system';
@@ -6,8 +6,11 @@ import * as Sharing from 'expo-sharing';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/authStore';
 import { FramedQR, type QRCodeRef, type QRFrameStyle, QR_FRAME_LABELS } from '@/components/DesignableQR';
+import { readNfcTagForDoor, isNfcAvailable, startAutoNfcDoorListener } from '@/lib/nfcDoor';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BarcodeScannerView } from '@/components/BarcodeScannerView';
+import { useFocusEffect } from 'expo-router';
+import { theme } from '@/constants/theme';
 
 export default function DigitalKeyScreen() {
   const { user } = useAuthStore();
@@ -24,7 +27,33 @@ export default function DigitalKeyScreen() {
   const [qrDrawerVisible, setQrDrawerVisible] = useState(false);
   const [selectedQrType, setSelectedQrType] = useState<'checkin' | 'contract'>('checkin');
   const [selectedFrame, setSelectedFrame] = useState<QRFrameStyle>('modern');
+  const [nfcAvailable, setNfcAvailable] = useState(false);
+  const [nfcLoading, setNfcLoading] = useState(false);
+  const [nfcListening, setNfcListening] = useState(false);
   const insets = useSafeAreaInsets();
+  const openDoorWithRoomRef = useRef<(roomNum: string) => Promise<void>>(() => Promise.resolve());
+
+  useFocusEffect(
+    useCallback(() => {
+      if (Platform.OS === 'web' || !isValid || !nfcAvailable || openDoorLoading) return;
+      setNfcListening(true);
+      const listener = startAutoNfcDoorListener((result) => {
+        setNfcListening(false);
+        if (!result?.room) return;
+        openDoorWithRoomRef.current(result.room);
+      });
+      return () => {
+        listener.stop();
+        setNfcListening(false);
+      };
+    }, [isValid, nfcAvailable, openDoorLoading])
+  );
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') {
+      isNfcAvailable().then(setNfcAvailable);
+    }
+  }, []);
 
   const FRAME_OPTIONS: QRFrameStyle[] = ['minimal', 'bordered', 'modern', 'elegant'];
   const checkinDesign = { useLogo: true, backgroundColor: '#ffffff', foregroundColor: '#111827', shape: 'rounded' as const, logoSizeRatio: 0.22 };
@@ -131,16 +160,31 @@ export default function DigitalKeyScreen() {
     downloadQrAsImage(ref, which === 'checkin' ? 'checkin' : 'sozlesme');
   };
 
-  const openDoor = async () => {
-    const num = doorRoomInput.trim() || (roomNumber !== '—' ? roomNumber : '');
-    if (!num) {
-      Alert.alert('Oda numarası girin', 'Açmak istediğiniz kapının oda numarasını yazın (örn. 101).');
-      return;
+  const openDoorByNfc = async () => {
+    setNfcLoading(true);
+    try {
+      const result = await readNfcTagForDoor();
+      if (!result) {
+        Alert.alert('İptal', 'Etiket okunamadı veya işlem iptal edildi.');
+        return;
+      }
+      if (!result.room) {
+        Alert.alert('Geçersiz etiket', `Bu etiket oda bilgisi içermiyor: ${result.raw || '(boş)'}`);
+        return;
+      }
+      await openDoorWithRoom(result.room);
+    } catch (e) {
+      Alert.alert('Hata', (e as Error)?.message ?? 'NFC okuma başarısız.');
+    } finally {
+      setNfcLoading(false);
     }
+  };
+
+  const openDoorWithRoom = useCallback(async (roomNum: string) => {
     setOpenDoorLoading(true);
     try {
       const { data, error } = await supabase.functions.invoke('open-door', {
-        body: { room_number: num },
+        body: { room_number: roomNum },
       });
       if (error) throw error;
       const result = data?.result ?? data?.success ? 'granted' : 'denied';
@@ -152,8 +196,20 @@ export default function DigitalKeyScreen() {
       }
     } catch (e: unknown) {
       Alert.alert('Hata', (e as Error)?.message ?? 'Kapı açma isteği gönderilemedi.');
+    } finally {
+      setOpenDoorLoading(false);
     }
-    setOpenDoorLoading(false);
+  }, []);
+
+  openDoorWithRoomRef.current = openDoorWithRoom;
+
+  const openDoor = async () => {
+    const num = doorRoomInput.trim() || (roomNumber !== '—' ? roomNumber : '');
+    if (!num) {
+      Alert.alert('Oda numarası girin', 'Açmak istediğiniz kapının oda numarasını yazın (örn. 101).');
+      return;
+    }
+    await openDoorWithRoom(num);
   };
 
   return (
@@ -169,7 +225,7 @@ export default function DigitalKeyScreen() {
       <View style={[styles.card, !isValid && styles.cardDisabled]}>
         <Text style={styles.cardTitle}>Dijital Anahtar</Text>
         <Text style={styles.note}>
-          Telefonla kapı açma: oda numarasını yazıp "Kapıyı aç" butonuna basın. Check-in yapmış olmalısınız.
+          Oda numarası yazıp "Kapıyı aç" veya kapıdaki NFC etiketine telefonu yaklaştırın (otomatik okunur). Check-in yapmış olmalısınız.
         </Text>
         {!isValid && (
           <Text style={styles.invalidHint}>
@@ -202,6 +258,29 @@ export default function DigitalKeyScreen() {
               <Text style={styles.openDoorBtnText}>Kapıyı aç</Text>
             )}
           </TouchableOpacity>
+          {!nfcAvailable && Platform.OS !== 'web' && (
+            <Text style={styles.nfcUnavailableHint}>
+              NFC bu cihazda kullanılamıyor. QR ile giriş yaptıktan sonra oda numarasıyla kapıyı açabilirsiniz.
+            </Text>
+          )}
+          {nfcAvailable && (
+            <>
+              {nfcListening && (
+                <Text style={styles.nfcListeningHint}>Kapı etiketine yaklaştırın…</Text>
+              )}
+              <TouchableOpacity
+                style={[styles.nfcBtn, (nfcLoading || openDoorLoading) && styles.openDoorBtnDisabled]}
+                onPress={openDoorByNfc}
+                disabled={nfcLoading || openDoorLoading}
+              >
+                {nfcLoading ? (
+                  <ActivityIndicator color="#1a365d" size="small" />
+                ) : (
+                  <Text style={styles.nfcBtnText}>Manuel NFC ile kapı aç</Text>
+                )}
+              </TouchableOpacity>
+            </>
+          )}
         </View>
       )}
 
@@ -377,4 +456,8 @@ const styles = StyleSheet.create({
   openDoorBtn: { backgroundColor: '#059669', paddingVertical: 16, borderRadius: 12, alignItems: 'center' },
   openDoorBtnDisabled: { opacity: 0.7 },
   openDoorBtnText: { color: '#fff', fontWeight: '700', fontSize: 16 },
+  nfcListeningHint: { marginTop: 8, fontSize: 13, color: theme.colors.primary, textAlign: 'center' },
+  nfcUnavailableHint: { marginTop: 10, fontSize: 13, color: '#6b7280', textAlign: 'center', lineHeight: 18 },
+  nfcBtn: { marginTop: 10, paddingVertical: 14, borderRadius: 12, alignItems: 'center', borderWidth: 2, borderColor: '#1a365d', backgroundColor: 'transparent' },
+  nfcBtnText: { color: '#1a365d', fontWeight: '700', fontSize: 15 },
 });

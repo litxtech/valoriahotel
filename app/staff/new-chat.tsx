@@ -14,10 +14,12 @@ import { supabase } from '@/lib/supabase';
 import { theme } from '@/constants/theme';
 import { useAuthStore } from '@/stores/authStore';
 import { staffGetOrCreateDirectConversation } from '@/lib/messagingApi';
+import { CachedImage } from '@/components/CachedImage';
 
 type GuestRow = {
   id: string;
   full_name: string | null;
+  photo_url?: string | null;
   rooms?: { room_number: string } | null;
   room_id?: string | null;
   status?: string | null;
@@ -29,6 +31,7 @@ type StaffRow = {
   department: string | null;
   is_online: boolean | null;
   role?: string | null;
+  profile_image?: string | null;
 };
 
 type RowItem = {
@@ -36,6 +39,7 @@ type RowItem = {
   name: string;
   sub: string;
   type: 'guest' | 'staff';
+  avatar?: string | null;
 };
 
 export default function StaffNewChatScreen() {
@@ -54,13 +58,15 @@ export default function StaffNewChatScreen() {
       const [gRes, sRes] = await Promise.all([
         supabase
           .from('guests')
-          .select('id, full_name, room_id, status, rooms(room_number)')
+          .select('id, full_name, photo_url, room_id, status, rooms(room_number)')
           .in('status', ['checked_in'])
+          .is('deleted_at', null)
           .order('full_name'),
         supabase
           .from('staff')
-          .select('id, full_name, department, is_online, role')
+          .select('id, full_name, department, is_online, role, profile_image')
           .eq('is_active', true)
+          .is('deleted_at', null)
           .neq('id', staff.id)
           .order('full_name'),
       ]);
@@ -86,16 +92,23 @@ export default function StaffNewChatScreen() {
           name: g.full_name || 'Misafir',
           sub: roomNumber ? `Oda ${roomNumber}` : '—',
           type: 'guest' as const,
+          avatar: g.photo_url ?? null,
         };
       })
       .filter((x) => matches(`${x.name} ${x.sub}`));
 
-    const staffItems: RowItem[] = staffList
+    const staffItems: RowItem[] = [...staffList]
+      .sort((a, b) => {
+        const aAdmin = (a.role === 'admin') ? 0 : 1;
+        const bAdmin = (b.role === 'admin') ? 0 : 1;
+        return aAdmin - bAdmin || (a.full_name || '').localeCompare(b.full_name || '');
+      })
       .map((s) => ({
         id: s.id,
         name: s.full_name || 'Personel',
         sub: s.department || s.role || '—',
         type: 'staff' as const,
+        avatar: s.profile_image ?? null,
       }))
       .filter((x) => matches(`${x.name} ${x.sub}`));
 
@@ -169,9 +182,13 @@ export default function StaffNewChatScreen() {
               android_ripple={{ color: theme.colors.borderLight }}
             >
               <View style={[styles.avatar, item.type === 'guest' ? styles.avatarGuest : styles.avatarStaff]}>
-                <Text style={styles.avatarText} numberOfLines={1}>
-                  {item.name.charAt(0).toUpperCase()}
-                </Text>
+                {item.avatar ? (
+                  <CachedImage uri={item.avatar} style={styles.avatarImg} contentFit="cover" />
+                ) : (
+                  <Text style={styles.avatarText} numberOfLines={1}>
+                    {item.name.charAt(0).toUpperCase()}
+                  </Text>
+                )}
               </View>
               <View style={styles.rowBody}>
                 <Text style={styles.rowTitle} numberOfLines={1}>
@@ -267,6 +284,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
+    overflow: 'hidden',
+  },
+  avatarImg: {
+    width: 48,
+    height: 48,
   },
   avatarGuest: {
     backgroundColor: theme.colors.primary,

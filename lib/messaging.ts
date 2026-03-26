@@ -22,6 +22,10 @@ export interface Conversation {
 export interface ConversationWithMeta extends Conversation {
   last_message_preview?: string | null;
   unread_count?: number;
+  is_pinned?: boolean;
+  is_muted?: boolean;
+  /** Direct sohbetlerde karşı tarafın profil resmi (staff profile_image). */
+  other_avatar?: string | null;
   other_participant?: { id: string; type: ParticipantType; name: string; avatar: string | null; is_online?: boolean; last_seen?: string | null };
 }
 

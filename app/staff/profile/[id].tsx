@@ -11,8 +11,10 @@ import {
   Dimensions,
   Modal,
   Pressable,
+  Linking,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/authStore';
@@ -20,10 +22,13 @@ import { staffGetOrCreateDirectConversation } from '@/lib/messagingApi';
 import { theme } from '@/constants/theme';
 import { StaffNameWithBadge, AvatarWithBadge } from '@/components/VerifiedBadge';
 import { CachedImage } from '@/components/CachedImage';
+import { ImagePreviewModal } from '@/components/ImagePreviewModal';
+import { blockUserForStaff, getHiddenUsersForStaff } from '@/lib/userBlocks';
 
 const OTHER_STAFF_REVIEW_LIMIT = 5;
-const COVER_HEIGHT = 240;
-const AVATAR_SIZE = 112;
+const COVER_HEIGHT = 260;
+const AVATAR_SIZE = 116;
+const HEADER_AVATAR_SIZE = 64;
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 type StaffProfile = {
@@ -44,6 +49,14 @@ type StaffProfile = {
   achievements: string[] | null;
   verification_badge?: 'blue' | 'yellow' | null;
   shift?: { start_time: string; end_time: string } | null;
+  role?: string | null;
+  show_gold_profile_border?: boolean | null;
+  phone?: string | null;
+  email?: string | null;
+  whatsapp?: string | null;
+  show_phone_to_guest?: boolean | null;
+  show_email_to_guest?: boolean | null;
+  show_whatsapp_to_guest?: boolean | null;
 };
 
 type ReviewRow = {
@@ -56,11 +69,14 @@ type ReviewRow = {
 export default function StaffProfileViewScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { staff: me } = useAuthStore();
   const [profile, setProfile] = useState<StaffProfile | null>(null);
   const [reviews, setReviews] = useState<ReviewRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [coverModalVisible, setCoverModalVisible] = useState(false);
+  const [avatarModalVisible, setAvatarModalVisible] = useState(false);
+  const [profileMenuVisible, setProfileMenuVisible] = useState(false);
 
   useEffect(() => {
     if (!id) {
@@ -68,13 +84,22 @@ export default function StaffProfileViewScreen() {
       return;
     }
     const load = async () => {
+      if (me?.id && me.id !== id) {
+        const hidden = await getHiddenUsersForStaff(me.id);
+        if (hidden.hiddenStaffIds.has(id)) {
+          setProfile(null);
+          setLoading(false);
+          return;
+        }
+      }
       const { data, error } = await supabase
         .from('staff')
         .select(
-          'id, full_name, department, position, profile_image, cover_image, bio, is_online, hire_date, average_rating, total_reviews, specialties, languages, office_location, achievements, verification_badge, shift_id'
+          'id, full_name, department, position, profile_image, cover_image, bio, is_online, hire_date, average_rating, total_reviews, specialties, languages, office_location, achievements, verification_badge, shift_id, role, show_gold_profile_border, phone, email, whatsapp, show_phone_to_guest, show_email_to_guest, show_whatsapp_to_guest'
         )
         .eq('id', id)
         .eq('is_active', true)
+        .is('deleted_at', null)
         .maybeSingle();
       if (error || !data) {
         setProfile(null);
@@ -101,7 +126,7 @@ export default function StaffProfileViewScreen() {
       setLoading(false);
     };
     load();
-  }, [id]);
+  }, [id, me?.id]);
 
   const [openingChat, setOpeningChat] = useState(false);
   const openChat = async () => {
@@ -115,6 +140,30 @@ export default function StaffProfileViewScreen() {
       Alert.alert('Hata', 'Sohbet açılamadı.');
     }
     setOpeningChat(false);
+  };
+
+  const handleBlockFromProfile = () => {
+    if (!id || !me?.id || me.id === id) return;
+    Alert.alert('Kullanıcıyı engelle', 'Bu kullanıcı artık sizi göremez ve siz de onu göremezsiniz.', [
+      { text: 'İptal', style: 'cancel' },
+      {
+        text: 'Engelle',
+        style: 'destructive',
+        onPress: async () => {
+          const { error } = await blockUserForStaff({
+            blockerStaffId: me.id,
+            blockedType: 'staff',
+            blockedId: id,
+          });
+          if (error && error.code !== '23505') {
+            Alert.alert('Hata', error.message || 'Kullanıcı engellenemedi.');
+            return;
+          }
+          setProfileMenuVisible(false);
+          router.back();
+        },
+      },
+    ]);
   };
 
   if (loading) {
@@ -139,38 +188,63 @@ export default function StaffProfileViewScreen() {
 
   const avatarUri = profile.profile_image || undefined;
   const isMe = me?.id === profile.id;
+  const showGoldBorder =
+    !isMe &&
+    profile.role === 'admin' &&
+    (profile.show_gold_profile_border ?? false);
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-      <View style={styles.coverBlock}>
-        <TouchableOpacity
-          style={styles.coverImageClip}
-          activeOpacity={1}
-          onPress={() => profile.cover_image && setCoverModalVisible(true)}
-        >
-          {profile.cover_image ? (
-            <CachedImage uri={profile.cover_image} style={StyleSheet.absoluteFill} contentFit="cover" />
-          ) : (
-            <View style={styles.coverPlaceholder} />
-          )}
-        </TouchableOpacity>
-        <View style={styles.avatarOnCover}>
-          <AvatarWithBadge badge={profile.verification_badge ?? null} avatarSize={120} badgeSize={20}>
-            {avatarUri ? (
-              <CachedImage uri={avatarUri} style={styles.avatar} contentFit="cover" />
+    <View style={[styles.container, showGoldBorder && styles.containerGoldBorder]}>
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <View style={styles.coverBlock}>
+          <TouchableOpacity
+            style={[styles.coverActionBtn, styles.coverBackBtn, { top: insets.top + 8 }]}
+            onPress={() => router.back()}
+            activeOpacity={0.7}
+            accessibilityLabel="Geri"
+          >
+            <Ionicons name="chevron-back" size={24} color={theme.colors.white} />
+          </TouchableOpacity>
+          {!isMe ? (
+            <TouchableOpacity
+              style={[styles.coverActionBtn, styles.coverMenuBtn, { top: insets.top + 8 }]}
+              onPress={() => setProfileMenuVisible(true)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="ellipsis-horizontal" size={22} color={theme.colors.white} />
+            </TouchableOpacity>
+          ) : null}
+          <View style={styles.coverGradient} pointerEvents="none" />
+          <TouchableOpacity
+            style={styles.coverImageClip}
+            activeOpacity={1}
+            onPress={() => profile.cover_image && setCoverModalVisible(true)}
+          >
+            {profile.cover_image ? (
+              <CachedImage uri={profile.cover_image} style={StyleSheet.absoluteFill} contentFit="cover" />
             ) : (
-              <View style={[styles.avatar, styles.avatarPlaceholder]}>
-                <Text style={styles.avatarLetter}>
-                  {(profile.full_name || '?').charAt(0).toUpperCase()}
-                </Text>
+              <View style={styles.coverPlaceholder} />
+            )}
+          </TouchableOpacity>
+      </View>
+      <View style={styles.profileHeaderRow}>
+        <TouchableOpacity activeOpacity={1} onPress={() => avatarUri && setAvatarModalVisible(true)}>
+          <AvatarWithBadge badge={profile.verification_badge ?? null} avatarSize={HEADER_AVATAR_SIZE} badgeSize={18} showBadge={false}>
+            {avatarUri ? (
+              <CachedImage uri={avatarUri} style={[styles.avatar, styles.avatarSmall]} contentFit="cover" />
+            ) : (
+              <View style={[styles.avatar, styles.avatarPlaceholder, styles.avatarSmall]}>
+                <Text style={styles.avatarLetterSmall}>{(profile.full_name || '?').charAt(0).toUpperCase()}</Text>
               </View>
             )}
           </AvatarWithBadge>
+        </TouchableOpacity>
+        <View style={styles.nameBlock}>
+          <StaffNameWithBadge name={profile.full_name || '—'} badge={profile.verification_badge ?? null} badgeSize={18} textStyle={styles.name} center />
+          <Text style={styles.dept}>{profile.position || profile.department || '—'}</Text>
         </View>
       </View>
-      <View style={[styles.body, { paddingTop: AVATAR_SIZE / 2 + 16 }]}>
-        <StaffNameWithBadge name={profile.full_name || '—'} badge={profile.verification_badge ?? null} textStyle={styles.name} />
-        <Text style={styles.dept}>{profile.position || profile.department || '—'}</Text>
+      <View style={styles.body}>
 
         {(profile.average_rating != null && profile.average_rating > 0) && (
           <View style={styles.ratingRow}>
@@ -261,6 +335,50 @@ export default function StaffProfileViewScreen() {
           </View>
         )}
 
+        {!isMe && (() => {
+          const showPhone = !!profile.phone?.trim();
+          const showEmail = !!profile.email?.trim();
+          const showWhatsApp = !!profile.whatsapp?.trim();
+          const hasAnyContact = showPhone || showEmail || showWhatsApp;
+          if (!hasAnyContact) return null;
+          return (
+            <View style={styles.avatarActionsRow}>
+              {showPhone && (
+                <TouchableOpacity
+                  onPress={() => profile.phone && Linking.openURL(`tel:${profile.phone.trim()}`)}
+                  style={[styles.avatarActionCircle, styles.avatarActionPhone]}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="call" size={20} color={theme.colors.white} />
+                </TouchableOpacity>
+              )}
+              {showWhatsApp && (
+                <TouchableOpacity
+                  onPress={() =>
+                    profile.whatsapp &&
+                    Linking.openURL(`https://wa.me/${profile.whatsapp.trim().replace(/\D/g, '')}`)
+                  }
+                  style={[styles.avatarActionCircle, styles.avatarActionWhatsApp]}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="logo-whatsapp" size={20} color={theme.colors.white} />
+                </TouchableOpacity>
+              )}
+              {showEmail && (
+                <TouchableOpacity
+                  onPress={() =>
+                    profile.email && Linking.openURL(`mailto:${profile.email.trim()}`)
+                  }
+                  style={[styles.avatarActionCircle, styles.avatarActionMail]}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="mail" size={20} color={theme.colors.white} />
+                </TouchableOpacity>
+              )}
+            </View>
+          );
+        })()}
+
         {!isMe && (
           <TouchableOpacity
             style={[styles.chatBtn, openingChat && styles.chatBtnDisabled]}
@@ -291,20 +409,33 @@ export default function StaffProfileViewScreen() {
       </View>
 
       <Modal
-        visible={coverModalVisible}
+        visible={profileMenuVisible}
         transparent
         animationType="fade"
-        onRequestClose={() => setCoverModalVisible(false)}
+        onRequestClose={() => setProfileMenuVisible(false)}
       >
-        <Pressable style={styles.imageModalOverlay} onPress={() => setCoverModalVisible(false)}>
-          <Pressable style={styles.imageModalContent} onPress={() => {}}>
-            {profile.cover_image ? (
-              <CachedImage uri={profile.cover_image} style={styles.imageModalImage} contentFit="contain" />
-            ) : null}
-          </Pressable>
+        <Pressable style={styles.imageModalOverlay} onPress={() => setProfileMenuVisible(false)}>
+          <View style={styles.profileMenuBox}>
+            <TouchableOpacity style={styles.profileMenuItem} onPress={handleBlockFromProfile} activeOpacity={0.7}>
+              <Ionicons name="ban-outline" size={20} color={theme.colors.error} />
+              <Text style={styles.profileMenuText}>Engelle</Text>
+            </TouchableOpacity>
+          </View>
         </Pressable>
       </Modal>
-    </ScrollView>
+
+      <ImagePreviewModal
+        visible={coverModalVisible}
+        uri={profile.cover_image ?? null}
+        onClose={() => setCoverModalVisible(false)}
+      />
+      <ImagePreviewModal
+        visible={avatarModalVisible}
+        uri={profile.profile_image ?? null}
+        onClose={() => setAvatarModalVisible(false)}
+      />
+      </ScrollView>
+    </View>
   );
 }
 
@@ -317,8 +448,18 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
+const GOLD_COLOR = '#D4AF37';
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.backgroundSecondary },
+  containerGoldBorder: {
+    borderLeftWidth: 4,
+    borderRightWidth: 4,
+    borderTopWidth: 4,
+    borderColor: GOLD_COLOR,
+  },
+  scroll: { flex: 1 },
+  scrollContent: { paddingBottom: 32 },
   centered: {
     flex: 1,
     justifyContent: 'center',
@@ -343,6 +484,27 @@ const styles = StyleSheet.create({
     overflow: 'visible',
     backgroundColor: theme.colors.borderLight,
   },
+  coverActionBtn: {
+    position: 'absolute',
+    zIndex: 10,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  coverBackBtn: { left: 16 },
+  coverMenuBtn: { right: 16 },
+  coverGradient: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 100,
+    zIndex: 2,
+    backgroundColor: 'rgba(0,0,0,0.2)',
+  },
   coverImageClip: {
     position: 'absolute',
     top: 0,
@@ -355,12 +517,18 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: theme.colors.borderLight,
   },
-  avatarOnCover: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: -AVATAR_SIZE / 2 + 55,
+  profileHeaderRow: {
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 16,
+    paddingVertical: 20,
+    paddingHorizontal: theme.spacing.lg,
+    backgroundColor: theme.colors.surface,
+    marginHorizontal: 16,
+    marginTop: 12,
+    borderRadius: 20,
+    ...theme.shadows.md,
   },
   avatar: {
     width: AVATAR_SIZE,
@@ -373,18 +541,26 @@ const styles = StyleSheet.create({
     elevation: 6,
   },
   avatarPlaceholder: { justifyContent: 'center', alignItems: 'center' },
+  avatarSmall: { width: HEADER_AVATAR_SIZE, height: HEADER_AVATAR_SIZE, borderRadius: HEADER_AVATAR_SIZE / 2, borderWidth: 2 },
   avatarLetter: { fontSize: 36, fontWeight: '700', color: theme.colors.primary },
+  avatarLetterSmall: { fontSize: 24, fontWeight: '700', color: theme.colors.primary },
   body: {
-    padding: theme.spacing.lg,
+    padding: theme.spacing.xl,
     backgroundColor: theme.colors.surface,
     marginHorizontal: 16,
-    marginTop: 0,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: theme.colors.borderLight,
+    marginTop: 16,
+    borderRadius: 20,
+    borderWidth: 0,
+    ...theme.shadows.md,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 6,
   },
-  name: { ...theme.typography.title, color: theme.colors.text, textAlign: 'center', marginBottom: 4 },
-  dept: { fontSize: 15, color: theme.colors.primary, textAlign: 'center', marginBottom: 8 },
+  nameBlock: { alignItems: 'center', marginBottom: 4 },
+  name: { ...theme.typography.title, fontSize: 24, color: theme.colors.text, textAlign: 'center', marginBottom: 6 },
+  dept: { fontSize: 16, fontWeight: '600', color: theme.colors.primary, textAlign: 'center', marginBottom: 8 },
   ratingRow: { alignItems: 'center', marginBottom: 12 },
   ratingText: { fontSize: 14, color: theme.colors.primary, fontWeight: '600' },
   infoRow: { marginTop: 8 },
@@ -404,6 +580,24 @@ const styles = StyleSheet.create({
   reviewCard: { paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: theme.colors.borderLight },
   reviewStars: { color: theme.colors.primary, marginBottom: 4 },
   reviewComment: { fontSize: 13, color: theme.colors.text },
+  avatarActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    marginTop: 20,
+    marginBottom: 8,
+  },
+  avatarActionCircle: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarActionPhone: { backgroundColor: theme.colors.primary },
+  avatarActionWhatsApp: { backgroundColor: '#25D366' },
+  avatarActionMail: { backgroundColor: theme.colors.accent },
   chatBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -422,6 +616,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  profileMenuBox: {
+    marginTop: 80,
+    marginLeft: 'auto',
+    marginRight: 24,
+    backgroundColor: theme.colors.surface,
+    borderRadius: 12,
+    minWidth: 160,
+    paddingVertical: 8,
+  },
+  profileMenuItem: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 12 },
+  profileMenuText: { color: theme.colors.error, fontSize: 15, fontWeight: '600' },
   imageModalContent: { flex: 1, width: '100%', justifyContent: 'center' },
   imageModalImage: { width: '100%', height: '100%' },
 });

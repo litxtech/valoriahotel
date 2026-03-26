@@ -13,12 +13,16 @@ import {
   FlatList,
   ActivityIndicator,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useGuestFlowStore } from '@/stores/guestFlowStore';
 import { useGuestMessagingStore } from '@/stores/guestMessagingStore';
 import { supabase, supabaseUrl, supabaseAnonKey } from '@/lib/supabase';
+import { uriToArrayBuffer } from '@/lib/uploadMedia';
+import { ensureMediaLibraryPermission } from '@/lib/mediaLibraryPermission';
+import { CachedImage } from '@/components/CachedImage';
 import { COUNTRY_PHONE_CODES, type CountryCode } from '@/constants/countryPhoneCodes';
 import { LANGUAGES } from '@/i18n';
 import { FORM_STRINGS, DEFAULT_FORM_FIELDS, type ContractFormLang } from '@/lib/contractFormStrings';
@@ -75,7 +79,7 @@ export default function GuestSignOneScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ token?: string; lang?: string; t?: string; l?: string }>();
-  const { qrToken, roomId, setQR, setStep, setGuestId, setContractLang: setStoreContractLang } = useGuestFlowStore();
+  const { qrToken, roomId, setQR, setStep, setGuestId, setContractLang: setStoreContractLang, setSignedFormLines } = useGuestFlowStore();
   const { setAppToken } = useGuestMessagingStore();
 
   const token = (params.token ?? params.t ?? qrToken ?? '').trim();
@@ -119,6 +123,7 @@ export default function GuestSignOneScreen() {
   const [roomType, setRoomType] = useState('Çift kişilik');
   const [adults, setAdults] = useState(1);
   const [children, setChildren] = useState(0);
+  const [avatarUri, setAvatarUri] = useState<string | null>(null);
 
   const fetchContract = useCallback(async (lng: string) => {
     setLoadingContract(true);
@@ -247,6 +252,27 @@ export default function GuestSignOneScreen() {
     formFieldsConfig.children && `${formStrings.children}: ${children}`,
   ].filter(Boolean);
 
+  const pickAvatar = async () => {
+    const granted = await ensureMediaLibraryPermission({
+      title: 'Galeri izni',
+      message: 'Profil fotoğrafı seçmek için galeri erişimi istiyoruz.',
+      settingsMessage: 'Galeri izni kapalı. Ayarlardan izin verip tekrar deneyin.',
+    });
+    if (!granted) return;
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.6,
+      });
+      if (result.canceled || !result.assets[0]?.uri) return;
+      setAvatarUri(result.assets[0].uri);
+    } catch (e) {
+      Alert.alert(t('error'), (e as Error)?.message ?? 'Fotoğraf seçilemedi.');
+    }
+  };
+
   const submit = async () => {
     if (formFieldsConfig.full_name && !fullName.trim()) {
       Alert.alert(t('error'), formStrings.errorFullName);
@@ -299,6 +325,22 @@ export default function GuestSignOneScreen() {
         setGuestId(guest.id);
         const { data: appToken } = await supabase.rpc('get_guest_app_token', { p_guest_id: guest.id });
         if (appToken) await setAppToken(appToken);
+        if (avatarUri) {
+          try {
+            const arrayBuffer = await uriToArrayBuffer(avatarUri);
+            const fileName = `guest/${guest.id}/${Date.now()}.jpg`;
+            const { error: uploadErr } = await supabase.storage.from('profiles').upload(fileName, arrayBuffer, {
+              contentType: 'image/jpeg',
+              upsert: true,
+            });
+            if (!uploadErr) {
+              const { data: { publicUrl } } = supabase.storage.from('profiles').getPublicUrl(fileName);
+              await supabase.from('guests').update({ photo_url: publicUrl }).eq('id', guest.id);
+            }
+          } catch {
+            /* avatar upload failed, continue */
+          }
+        }
       }
 
       if (token) {
@@ -314,6 +356,7 @@ export default function GuestSignOneScreen() {
       }
 
       setStoreContractLang(contractLang);
+      setSignedFormLines(signerSummary as string[]);
       setStep('done');
       router.replace('/guest/success');
     } catch (e: unknown) {
@@ -368,6 +411,24 @@ export default function GuestSignOneScreen() {
         <View style={styles.pageTitleWrap}>
           <Text style={styles.pageTitle}>{formStrings.pageTitle}</Text>
           <Text style={styles.pageSubtitle}>{formStrings.pageSubtitle}</Text>
+        </View>
+
+        {/* Profil fotoğrafı — çalışanlarla aynı bölüm */}
+        <View style={styles.avatarSection}>
+          <TouchableOpacity
+            style={styles.avatarWrap}
+            onPress={saving ? undefined : pickAvatar}
+            activeOpacity={0.9}
+          >
+            {avatarUri ? (
+              <CachedImage uri={avatarUri} style={styles.avatarImage} contentFit="cover" />
+            ) : (
+              <View style={styles.avatarPlaceholder}>
+                <Text style={styles.avatarPlaceholderText}>+</Text>
+                <Text style={styles.avatarHint}>Profil fotoğrafı</Text>
+              </View>
+            )}
+          </TouchableOpacity>
         </View>
 
         {/* Dil seçenekleri – alt başlığın hemen altında */}
@@ -698,6 +759,22 @@ const styles = StyleSheet.create({
   pageTitleWrap: { alignItems: 'center', marginBottom: 24 },
   pageTitle: { fontSize: 26, fontWeight: '700', color: COLORS.text, marginBottom: 6, textAlign: 'center' },
   pageSubtitle: { fontSize: 15, color: COLORS.textSecondary, lineHeight: 22, textAlign: 'center' },
+  avatarSection: { alignItems: 'center', marginBottom: 20 },
+  avatarWrap: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    overflow: 'hidden',
+    backgroundColor: COLORS.inputBg,
+    borderWidth: 2,
+    borderColor: COLORS.cardBorder,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarImage: { width: 96, height: 96 },
+  avatarPlaceholder: { alignItems: 'center', justifyContent: 'center' },
+  avatarPlaceholderText: { fontSize: 32, color: COLORS.accent, fontWeight: '300' },
+  avatarHint: { fontSize: 11, color: COLORS.textSecondary, marginTop: 4 },
   section: { marginBottom: 28 },
   sectionTitle: {
     fontSize: 15,

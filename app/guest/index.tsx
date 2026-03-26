@@ -1,14 +1,18 @@
-import { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Linking } from 'react-native';
+import { useEffect, useState, useCallback } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Linking, AppState, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { CameraView, Camera } from 'expo-camera';
 import { useGuestFlowStore } from '@/stores/guestFlowStore';
 import { supabase } from '@/lib/supabase';
 import { useTranslation } from 'react-i18next';
 import { log } from '@/lib/logger';
 
+type PermStatus = 'granted' | 'denied' | 'undetermined';
+
 export default function GuestScanScreen() {
-  const [permission, requestPermission] = useCameraPermissions();
+  const [permStatus, setPermStatus] = useState<PermStatus | null>(null);
+  const [canAskAgain, setCanAskAgain] = useState(true);
+  const [requesting, setRequesting] = useState(false);
   const [scanned, setScanned] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
@@ -17,6 +21,38 @@ export default function GuestScanScreen() {
 
   useEffect(() => {
     reset();
+  }, []);
+
+  const refreshPermission = useCallback(async () => {
+    try {
+      const p = await Camera.getCameraPermissionsAsync();
+      setPermStatus(p.status as PermStatus);
+      setCanAskAgain(p.canAskAgain ?? true);
+    } catch {
+      setPermStatus('undetermined');
+      setCanAskAgain(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshPermission();
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') refreshPermission();
+    });
+    return () => sub.remove();
+  }, [refreshPermission]);
+
+  const handleRequestPermission = useCallback(async () => {
+    setRequesting(true);
+    try {
+      const result = await Camera.requestCameraPermissionsAsync();
+      setPermStatus(result.status as PermStatus);
+      setCanAskAgain(result.canAskAgain ?? true);
+    } catch {
+      setPermStatus('undetermined');
+    } finally {
+      setRequesting(false);
+    }
   }, []);
 
   const handleBarCodeScanned = async ({ data }: { type: string; data: string }) => {
@@ -71,22 +107,55 @@ export default function GuestScanScreen() {
     }
   };
 
-  if (!permission) {
+  if (permStatus === null) {
     return (
       <View style={styles.centered}>
+        <ActivityIndicator size="small" color="#b8860b" />
         <Text style={styles.message}>{t('loading')}</Text>
       </View>
     );
   }
 
-  if (!permission.granted) {
+  if (permStatus !== 'granted') {
     return (
       <View style={styles.centered}>
-        <Text style={styles.title}>{t('scanQR')}</Text>
-        <Text style={styles.subtitle}>{t('scanQRDesc')}</Text>
-        <TouchableOpacity style={styles.button} onPress={requestPermission}>
-          <Text style={styles.buttonText}>Kamera İzni Ver</Text>
-        </TouchableOpacity>
+        <View style={styles.permCard}>
+          <View style={styles.permCardHeader}>
+            <View style={styles.permCardIconWrap}>
+              <Text style={styles.permCardIcon}>📷</Text>
+            </View>
+            <View style={styles.permCardTitleWrap}>
+              <Text style={styles.permCardTitle}>{t('scanQR')}</Text>
+              <Text style={styles.permCardSubtitle}>
+                {t('scanQRDesc')} {!canAskAgain && 'Kamera izni daha önce kalıcı kapatıldı. Ayarlardan açmanız gerekir.'}
+              </Text>
+            </View>
+            <View style={[styles.permCardBadge, permStatus === 'denied' && styles.permCardBadgeDenied]}>
+              <Text style={[styles.permCardBadgeText, permStatus === 'denied' && styles.permCardBadgeTextDenied]}>
+                {permStatus === 'denied' ? 'Kapalı' : 'İstenmedi'}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.permCardNotes}>
+            <Text style={styles.permCardNote}>• "Devam" derseniz sistem izin penceresi açılır.</Text>
+            <Text style={styles.permCardNote}>• Daha önce reddedildiyse ayarlardan kamera iznini açmanız gerekir.</Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.permCardPrimaryBtn, requesting && { opacity: 0.75 }]}
+            onPress={canAskAgain ? handleRequestPermission : () => Linking.openSettings()}
+            disabled={requesting}
+            activeOpacity={0.85}
+          >
+            {requesting ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <>
+                <Text style={styles.permCardPrimaryIcon}>{canAskAgain ? '✓' : '⚙'}</Text>
+                <Text style={styles.permCardPrimaryText}>{canAskAgain ? 'Devam' : 'Ayarları aç'}</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
     );
   }
@@ -122,9 +191,82 @@ const styles = StyleSheet.create({
     backgroundColor: '#1a365d',
     padding: 24,
   },
-  title: { fontSize: 22, fontWeight: '700', color: '#fff', marginBottom: 8 },
-  subtitle: { fontSize: 14, color: 'rgba(255,255,255,0.8)', marginBottom: 24, textAlign: 'center' },
-  message: { color: '#fff' },
+  message: { color: '#fff', marginTop: 12 },
+  permCard: {
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+    padding: 16,
+    width: '100%',
+    maxWidth: 360,
+  },
+  permCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginBottom: 12,
+  },
+  permCardIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: 'rgba(237,137,54,0.3)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  permCardIcon: { fontSize: 22 },
+  permCardTitleWrap: { flex: 1, minWidth: 0 },
+  permCardTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#fff',
+    marginBottom: 4,
+  },
+  permCardSubtitle: {
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.85)',
+    lineHeight: 18,
+  },
+  permCardBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+  },
+  permCardBadgeDenied: { backgroundColor: 'rgba(239,68,68,0.3)' },
+  permCardBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.9)',
+  },
+  permCardBadgeTextDenied: { color: '#fca5a5' },
+  permCardNotes: {
+    backgroundColor: 'rgba(0,0,0,0.2)',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 14,
+  },
+  permCardNote: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.8)',
+    lineHeight: 18,
+  },
+  permCardPrimaryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    backgroundColor: '#ed8936',
+    borderRadius: 14,
+    paddingVertical: 14,
+  },
+  permCardPrimaryIcon: { fontSize: 18, color: '#fff', fontWeight: '700' },
+  permCardPrimaryText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 15,
+  },
   button: {
     backgroundColor: '#ed8936',
     paddingVertical: 14,
@@ -132,6 +274,15 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  settingsBtn: {
+    marginTop: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.5)',
+  },
+  settingsBtnText: { color: '#fff', fontSize: 15, fontWeight: '600' },
   overlay: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'center',

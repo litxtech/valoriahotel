@@ -3,15 +3,18 @@
  */
 import { File } from 'expo-file-system';
 import { encode as encodeBase64 } from 'base64-arraybuffer';
-import { supabase } from '@/lib/supabase';
+import { supabase, supabaseUrl, supabaseAnonKey } from '@/lib/supabase';
 import type { MessagingActor, Message, Conversation, ConversationWithMeta } from '@/lib/messaging';
 
 // ----- Staff (authenticated) -----
 
 export async function staffListConversations(staffId: string): Promise<ConversationWithMeta[]> {
+  const { data: staffRow } = await supabase.from('staff').select('created_at').eq('id', staffId).single();
+  const staffCreatedAt = (staffRow as { created_at: string } | null)?.created_at ?? '1970-01-01';
+
   const { data: participants, error: epErr } = await supabase
     .from('conversation_participants')
-    .select('conversation_id, last_read_at, is_pinned')
+    .select('conversation_id, last_read_at, is_pinned, is_muted')
     .eq('participant_id', staffId)
     .in('participant_type', ['staff', 'admin'])
     .is('left_at', null);
@@ -29,13 +32,13 @@ export async function staffListConversations(staffId: string): Promise<Conversat
   const convs = convsData as Conversation[];
   const lastMsgIds = convs.map((c) => c.last_message_id).filter(Boolean) as string[];
 
-  let lastMessages: { id: string; content: string | null }[] = [];
+  let lastMessages: { id: string; content: string | null; created_at: string }[] = [];
   if (lastMsgIds.length) {
     const { data: msgs } = await supabase
       .from('messages')
-      .select('id, content')
+      .select('id, content, created_at')
       .in('id', lastMsgIds);
-    lastMessages = msgs ?? [];
+    lastMessages = (msgs ?? []) as { id: string; content: string | null; created_at: string }[];
   }
 
   // Direct sohbetlerde karşı tarafın adı (tek sorgu)
@@ -52,11 +55,31 @@ export async function staffListConversations(staffId: string): Promise<Conversat
   }
   const guestIds = [...otherByConv.values()].filter((o) => o.type === 'guest').map((o) => o.id);
   const staffIds = [...otherByConv.values()].filter((o) => o.type === 'staff' || o.type === 'admin').map((o) => o.id);
-  const { data: guestNames } = guestIds.length ? await supabase.from('guests').select('id, full_name').in('id', guestIds) : { data: [] };
-  const { data: staffNames } = staffIds.length ? await supabase.from('staff').select('id, full_name').in('id', staffIds) : { data: [] };
+  const { data: guestNames } = guestIds.length ? await supabase.from('guests').select('id, full_name, photo_url, deleted_at').in('id', guestIds) : { data: [] };
+  const { data: staffRows } = staffIds.length ? await supabase.from('staff').select('id, full_name, profile_image, deleted_at').in('id', staffIds) : { data: [] };
+  const deletedGuestIds = new Set<string>();
+  const deletedStaffIds = new Set<string>();
   const nameById = new Map<string, string>();
-  for (const g of guestNames ?? []) nameById.set(g.id, (g as { full_name: string }).full_name || 'Misafir');
-  for (const s of staffNames ?? []) nameById.set(s.id, (s as { full_name: string }).full_name || 'Personel');
+  const staffAvatarById = new Map<string, string | null>();
+  const guestAvatarById = new Map<string, string | null>();
+  for (const g of guestNames ?? []) {
+    const row = g as { id: string; full_name: string; photo_url?: string | null; deleted_at?: string | null };
+    if (row.deleted_at) {
+      deletedGuestIds.add(row.id);
+      continue;
+    }
+    nameById.set(row.id, row.full_name || 'Misafir');
+    guestAvatarById.set(row.id, row.photo_url ?? null);
+  }
+  for (const s of staffRows ?? []) {
+    const row = s as { id: string; full_name: string; profile_image: string | null; deleted_at?: string | null };
+    if (row.deleted_at) {
+      deletedStaffIds.add(row.id);
+      continue;
+    }
+    nameById.set(row.id, row.full_name || 'Personel');
+    staffAvatarById.set(row.id, row.profile_image ?? null);
+  }
 
   // Okunmamış sayısı: kullanıcının göndermediği, last_read_at sonrası mesajlar
   const { data: recentMsgs } = await supabase
@@ -72,6 +95,7 @@ export async function staffListConversations(staffId: string): Promise<Conversat
   const unreadByConv = new Map<string, number>();
   for (const m of recentMsgs ?? []) {
     const row = m as { conversation_id: string; created_at: string; sender_id: string; sender_type: string };
+    if (new Date(row.created_at) < new Date(staffCreatedAt)) continue;
     if (row.sender_id === staffId && row.sender_type === 'staff') continue;
     const part = partByConv.get(row.conversation_id);
     const lastRead = part?.last_read_at ?? null;
@@ -79,32 +103,63 @@ export async function staffListConversations(staffId: string): Promise<Conversat
     unreadByConv.set(row.conversation_id, (unreadByConv.get(row.conversation_id) ?? 0) + 1);
   }
 
-  const list: ConversationWithMeta[] = convs.map((c) => {
+  const list: ConversationWithMeta[] = convs
+    .filter((c) => {
+      const other = otherByConv.get(c.id);
+      if (!other) return true;
+      if (other.type === 'guest' && deletedGuestIds.has(other.id)) return false;
+      if ((other.type === 'staff' || other.type === 'admin') && deletedStaffIds.has(other.id)) return false;
+      return true;
+    })
+    .map((c) => {
     const lastMsg = lastMessages.find((m) => m.id === c.last_message_id);
+    const preview =
+      lastMsg && new Date(lastMsg.created_at) >= new Date(staffCreatedAt) ? lastMsg.content ?? null : null;
     const part = participants.find((p: { conversation_id: string }) => p.conversation_id === c.id) as {
       last_read_at: string | null;
       is_pinned: boolean;
+      is_muted: boolean;
     } | undefined;
     const other = otherByConv.get(c.id);
     const displayName = c.name || (other ? nameById.get(other.id) || 'Sohbet' : 'Sohbet');
+    const otherAvatar = other
+      ? (other.type === 'staff' || other.type === 'admin')
+        ? staffAvatarById.get(other.id) ?? null
+        : guestAvatarById.get(other.id) ?? null
+      : null;
     return {
       ...c,
       name: displayName,
-      last_message_preview: lastMsg?.content ?? null,
+      last_message_preview: preview,
       unread_count: unreadByConv.get(c.id) ?? 0,
       is_pinned: part?.is_pinned ?? false,
+      is_muted: part?.is_muted ?? false,
+      other_avatar: c.type === 'direct' ? otherAvatar ?? null : undefined,
     };
   });
   list.sort((a, b) => (new Date(b.last_message_at ?? 0).getTime() - new Date(a.last_message_at ?? 0).getTime()));
   return list;
 }
 
-export async function staffGetMessages(conversationId: string, limit = 50, beforeId?: string): Promise<Message[]> {
+export async function staffGetMessages(
+  conversationId: string,
+  limit = 50,
+  beforeId?: string,
+  staffId?: string
+): Promise<Message[]> {
+  let staffCreatedAt: string | null = null;
+  if (staffId) {
+    const { data: staffRow } = await supabase.from('staff').select('created_at').eq('id', staffId).single();
+    staffCreatedAt = (staffRow as { created_at: string } | null)?.created_at ?? null;
+  }
+  const filterFrom = staffCreatedAt ?? '1970-01-01';
+
   let q = supabase
     .from('messages')
     .select('*')
     .eq('conversation_id', conversationId)
     .eq('is_deleted', false)
+    .gte('created_at', filterFrom)
     .order('created_at', { ascending: false })
     .limit(limit);
   if (beforeId) {
@@ -124,11 +179,12 @@ export async function staffSendMessage(
   content: string,
   messageType: 'text' | 'image' | 'file' | 'voice' = 'text',
   mediaUrl?: string
-): Promise<{ data: Message | null; error: string | null }> {
+): Promise<{ data: Message | null; error: string | null; conversationId: string }> {
+  const resolvedConversationId = await resolveStaffConversationForSend(conversationId, staffId);
   const { data, error } = await supabase
     .from('messages')
     .insert({
-      conversation_id: conversationId,
+      conversation_id: resolvedConversationId,
       sender_id: staffId,
       sender_type: 'staff',
       sender_name: staffName,
@@ -139,12 +195,34 @@ export async function staffSendMessage(
     })
     .select()
     .single();
-  if (error) return { data: null, error: error.message };
+  if (error) return { data: null, error: error.message, conversationId: resolvedConversationId };
   await supabase
     .from('conversations')
     .update({ last_message_id: data.id, last_message_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-    .eq('id', conversationId);
-  return { data: data as Message, error: null };
+    .eq('id', resolvedConversationId);
+  return { data: data as Message, error: null, conversationId: resolvedConversationId };
+}
+
+async function resolveStaffConversationForSend(conversationId: string, staffId: string): Promise<string> {
+  const { data: conv } = await supabase
+    .from('conversations')
+    .select('type')
+    .eq('id', conversationId)
+    .maybeSingle();
+  if ((conv as { type?: string } | null)?.type !== 'direct') return conversationId;
+
+  const { data: other } = await supabase
+    .from('conversation_participants')
+    .select('participant_id, participant_type')
+    .eq('conversation_id', conversationId)
+    .neq('participant_id', staffId)
+    .limit(1)
+    .maybeSingle();
+  const otherRow = other as { participant_id: string; participant_type: 'guest' | 'staff' | 'admin' } | null;
+  if (!otherRow?.participant_id || !otherRow?.participant_type) return conversationId;
+
+  const nextConversationId = await staffGetOrCreateDirectConversation(staffId, otherRow.participant_id, otherRow.participant_type);
+  return nextConversationId ?? conversationId;
 }
 
 export async function staffGetOrCreateDirectConversation(
@@ -162,6 +240,56 @@ export async function staffGetOrCreateDirectConversation(
   return data as string;
 }
 
+/** Personel/admin için grup sohbeti oluşturur. */
+export async function staffCreateGroupConversation(params: {
+  creatorStaffId: string;
+  creatorType?: 'staff' | 'admin';
+  groupName: string;
+  memberStaffIds: string[];
+}): Promise<{ conversationId: string | null; error: string | null }> {
+  const { creatorStaffId, creatorType = 'staff', groupName, memberStaffIds } = params;
+  const trimmed = groupName.trim();
+  if (!creatorStaffId || !trimmed) return { conversationId: null, error: 'Eksik grup bilgisi.' };
+
+  const uniqueMembers = [...new Set(memberStaffIds.filter(Boolean))].filter((id) => id !== creatorStaffId);
+
+  const { data: conversation, error: convErr } = await supabase
+    .from('conversations')
+    .insert({
+      type: 'group',
+      name: trimmed,
+      created_by: creatorStaffId,
+      created_by_type: creatorType,
+    })
+    .select('id')
+    .single();
+  if (convErr || !conversation?.id) return { conversationId: null, error: convErr?.message ?? 'Grup oluşturulamadı.' };
+
+  const conversationId = (conversation as { id: string }).id;
+
+  // Önce oluşturan kişiyi ekle (RLS için güvenli yol).
+  const { error: selfErr } = await supabase.from('conversation_participants').insert({
+    conversation_id: conversationId,
+    participant_id: creatorStaffId,
+    participant_type: creatorType,
+    role: 'admin',
+  });
+  if (selfErr) return { conversationId: null, error: selfErr.message };
+
+  if (uniqueMembers.length > 0) {
+    const rows = uniqueMembers.map((id) => ({
+      conversation_id: conversationId,
+      participant_id: id,
+      participant_type: 'staff' as const,
+      role: 'member' as const,
+    }));
+    const { error: membersErr } = await supabase.from('conversation_participants').insert(rows);
+    if (membersErr) return { conversationId: null, error: membersErr.message };
+  }
+
+  return { conversationId, error: null };
+}
+
 export async function staffMarkConversationRead(conversationId: string, staffId: string): Promise<void> {
   await supabase
     .from('conversation_participants')
@@ -171,8 +299,101 @@ export async function staffMarkConversationRead(conversationId: string, staffId:
     .in('participant_type', ['staff', 'admin']);
 }
 
-export function subscribeToMessages(conversationId: string, onMessage: (m: Message) => void) {
-  return supabase
+/** Personel/admin sohbeti kendi listesinden kaldırır. */
+export async function staffDeleteConversation(
+  conversationId: string,
+  staffId: string
+): Promise<{ error: string | null }> {
+  const { data, error } = await supabase
+    .from('conversation_participants')
+    .update({ left_at: new Date().toISOString() })
+    .eq('conversation_id', conversationId)
+    .eq('participant_id', staffId)
+    .in('participant_type', ['staff', 'admin'])
+    .is('left_at', null)
+    .select('id')
+    .limit(1);
+
+  if (error) return { error: error.message };
+  if (!data?.length) return { error: 'Sohbet silinemedi.' };
+  return { error: null };
+}
+
+/** Sohbet header’ı: gösterilecek isim ve avatar (personel/admin için). */
+export async function staffGetConversationHeader(
+  conversationId: string,
+  staffId: string
+): Promise<{ name: string; avatar: string | null }> {
+  const { data: conv, error: convErr } = await supabase
+    .from('conversations')
+    .select('type, name, avatar')
+    .eq('id', conversationId)
+    .single();
+  if (convErr || !conv) return { name: 'Sohbet', avatar: null };
+  const row = conv as { type: string; name: string | null; avatar: string | null };
+  if (row.type === 'group' && (row.name || row.avatar != null)) {
+    return { name: row.name || 'Sohbet', avatar: row.avatar ?? null };
+  }
+  const { data: other } = await supabase
+    .from('conversation_participants')
+    .select('participant_id, participant_type')
+    .eq('conversation_id', conversationId)
+    .neq('participant_id', staffId)
+    .is('left_at', null)
+    .limit(1)
+    .maybeSingle();
+  if (!other) return { name: row.name || 'Sohbet', avatar: row.avatar ?? null };
+  const o = other as { participant_id: string; participant_type: string };
+  if (o.participant_type === 'guest') {
+    const { data: g } = await supabase.from('guests').select('full_name, photo_url').eq('id', o.participant_id).maybeSingle();
+    const gr = g as { full_name: string; photo_url?: string | null } | null;
+    const name = gr?.full_name || 'Misafir';
+    return { name, avatar: gr?.photo_url ?? null };
+  }
+  const { data: s } = await supabase
+    .from('staff')
+    .select('full_name, profile_image')
+    .eq('id', o.participant_id)
+    .maybeSingle();
+  const st = s as { full_name: string; profile_image: string | null } | null;
+  return { name: st?.full_name || 'Personel', avatar: st?.profile_image ?? null };
+}
+
+/** Personel sohbeti sessize alır / sessizi kaldırır. */
+export async function staffSetConversationMuted(
+  conversationId: string,
+  staffId: string,
+  muted: boolean
+): Promise<{ error: string | null }> {
+  const { error } = await supabase
+    .from('conversation_participants')
+    .update({ is_muted: muted })
+    .eq('conversation_id', conversationId)
+    .eq('participant_id', staffId)
+    .in('participant_type', ['staff', 'admin']);
+  return { error: error?.message ?? null };
+}
+
+/** Personel mesajı siler (soft delete). Silinen mesaj listeden kalkar. */
+export async function staffDeleteMessage(
+  conversationId: string,
+  messageId: string
+): Promise<{ error: string | null }> {
+  const { data, error } = await supabase.rpc('messaging_delete_message_staff', {
+    p_conversation_id: conversationId,
+    p_message_id: messageId,
+  });
+  if (error) return { error: error.message };
+  if (data !== true) return { error: 'Mesaj silinemedi.' };
+  return { error: null };
+}
+
+export function subscribeToMessages(
+  conversationId: string,
+  onMessage: (m: Message) => void,
+  options?: { onMessageDeleted?: (messageId: string) => void }
+) {
+  const channel = supabase
     .channel(`messages:${conversationId}`)
     .on(
       'postgres_changes',
@@ -180,8 +401,51 @@ export function subscribeToMessages(conversationId: string, onMessage: (m: Messa
       (payload) => {
         onMessage(payload.new as Message);
       }
-    )
-    .subscribe();
+    );
+  if (options?.onMessageDeleted) {
+    channel.on(
+      'postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${conversationId}` },
+      (payload) => {
+        const row = payload.new as { id: string; is_deleted?: boolean };
+        if (row?.is_deleted) options.onMessageDeleted?.(row.id);
+      }
+    );
+  }
+  return channel.subscribe();
+}
+
+export type TypingPresenceState = { displayName: string; userId: string };
+
+/** Yazıyor göstergesi: aynı sohbet odasında kimlerin yazdığını dinler. */
+export function subscribeToTypingPresence(
+  conversationId: string,
+  myState: TypingPresenceState,
+  onTypingChange: (typerDisplayNames: string[]) => void
+): { updateTyping: (typing: boolean) => void; unsubscribe: () => void } {
+  const channel = supabase.channel(`typing:${conversationId}`);
+  channel.on('presence', { event: 'sync' }, () => {
+    const state = channel.presenceState() as Record<string, { displayName?: string; userId?: string; typing?: boolean }[]>;
+    const typers = Object.values(state)
+      .flat()
+      .filter((p) => p.typing && p.userId !== myState.userId)
+      .map((p) => p.displayName || '?')
+      .filter(Boolean);
+    onTypingChange(typers);
+  });
+  const sub = channel.subscribe(async (status) => {
+    if (status === 'SUBSCRIBED') {
+      await channel.track({ ...myState, typing: false });
+    }
+  });
+  return {
+    updateTyping(typing: boolean) {
+      channel.track({ ...myState, typing }).catch(() => {});
+    },
+    unsubscribe() {
+      supabase.removeChannel(channel);
+    },
+  };
 }
 
 export function subscribeToConversationList(staffId: string, onUpdate: () => void) {
@@ -208,6 +472,30 @@ export async function guestListConversations(appToken: string): Promise<Conversa
   return data as ConversationWithMeta[];
 }
 
+/** Misafir sohbet açıldığında okundu işaretle; mesaj badge'i güncellenir. */
+export async function guestMarkConversationRead(appToken: string, conversationId: string): Promise<boolean> {
+  const { data, error } = await supabase.rpc('messaging_guest_mark_conversation_read', {
+    p_app_token: appToken,
+    p_conversation_id: conversationId,
+  });
+  return !error && data === true;
+}
+
+/** Sohbet header’ı: gösterilecek isim ve avatar (misafir için). */
+export async function guestGetConversationHeader(
+  appToken: string,
+  conversationId: string
+): Promise<{ name: string; avatar: string | null }> {
+  const { data, error } = await supabase.rpc('messaging_get_conversation_header_guest', {
+    p_app_token: appToken,
+    p_conversation_id: conversationId,
+  });
+  if (error || !data?.length) return { name: 'Sohbet', avatar: null };
+  const row = Array.isArray(data) ? data[0] : data;
+  const r = row as { display_name: string | null; display_avatar: string | null };
+  return { name: r?.display_name || 'Sohbet', avatar: r?.display_avatar ?? null };
+}
+
 export async function guestGetMessages(appToken: string, conversationId: string, limit = 50, beforeId?: string): Promise<Message[]> {
   const { data, error } = await supabase.rpc('messaging_get_messages_guest', {
     p_app_token: appToken,
@@ -225,15 +513,25 @@ export async function guestSendMessage(
   content: string,
   messageType: 'text' | 'image' | 'file' | 'voice' = 'text',
   mediaUrl?: string | null
-): Promise<string | null> {
+): Promise<{ messageId: string | null; conversationId: string | null }> {
+  const resolvedConversationId = await resolveGuestConversationForSend(appToken, conversationId);
   const { data, error } = await supabase.rpc('messaging_send_message_guest', {
     p_app_token: appToken,
-    p_conversation_id: conversationId,
+    p_conversation_id: resolvedConversationId ?? conversationId,
     p_content: content,
     p_message_type: messageType,
     p_media_url: mediaUrl ?? null,
   });
-  if (error || data == null) return null;
+  if (error || data == null) return { messageId: null, conversationId: resolvedConversationId ?? conversationId };
+  return { messageId: data as string, conversationId: resolvedConversationId ?? conversationId };
+}
+
+async function resolveGuestConversationForSend(appToken: string, conversationId: string): Promise<string | null> {
+  const { data, error } = await supabase.rpc('messaging_guest_resolve_direct_conversation', {
+    p_app_token: appToken,
+    p_conversation_id: conversationId,
+  });
+  if (error || data == null) return conversationId;
   return data as string;
 }
 
@@ -244,6 +542,24 @@ export async function guestGetOrCreateConversationWithStaff(appToken: string, st
   });
   if (error || data == null) return null;
   return data as string;
+}
+
+/** Misafir kendi mesajını siler (soft delete). Silinen mesaj listeden kalkar. */
+export async function guestDeleteMessage(appToken: string, messageId: string): Promise<boolean> {
+  const { data, error } = await supabase.rpc('messaging_delete_message_guest', {
+    p_app_token: appToken,
+    p_message_id: messageId,
+  });
+  return !error && data === true;
+}
+
+/** Misafir sohbeti kendi listesinden kaldırır. */
+export async function guestDeleteConversation(appToken: string, conversationId: string): Promise<boolean> {
+  const { data, error } = await supabase.rpc('messaging_delete_conversation_guest', {
+    p_app_token: appToken,
+    p_conversation_id: conversationId,
+  });
+  return !error && data === true;
 }
 
 /** Misafir ses dosyasını yükler; Edge Function ile storage’a koyar, public URL döner. */
@@ -284,38 +600,48 @@ export async function uploadVoiceMessageForStaff(localUri: string): Promise<stri
   return urlData.publicUrl;
 }
 
-/** Misafir resim mesajı: base64 + mime_type ile Edge Function'a gönderilir. */
+/** Misafir resim mesajı: önce imzalı URL alınır (küçük istek), sonra resim doğrudan Storage’a yüklenir. */
 export async function uploadImageMessageForGuest(
   appToken: string,
   conversationId: string,
-  imageBase64: string,
+  imageArrayBuffer: ArrayBuffer,
   mimeType = 'image/jpeg'
-): Promise<string | null> {
+): Promise<string> {
   const convId = typeof conversationId === 'string' ? conversationId.trim() : conversationId;
   const token = typeof appToken === 'string' ? appToken.trim() : appToken;
-  console.log('[messagingApi] uploadImageMessageForGuest: conversationId=', convId, 'mimeType=', mimeType, 'base64Len=', imageBase64?.length);
-  const { data, error } = await supabase.functions.invoke('upload-message-media', {
-    body: {
+  const base64 = encodeBase64(imageArrayBuffer);
+  console.log('[messagingApi] uploadImageMessageForGuest: conversationId=', convId, 'mimeType=', mimeType, 'size=', imageArrayBuffer?.byteLength);
+
+  const url = `${supabaseUrl}/functions/v1/upload-message-media`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${supabaseAnonKey}`,
+    },
+    body: JSON.stringify({
       app_token: token,
       conversation_id: convId,
-      image_base64: imageBase64,
+      image_base64: base64,
       mime_type: mimeType,
-    },
+    }),
   });
-  if (error) {
-    const errBody = data && typeof data === 'object' && 'error' in data ? (data as { error?: string }).error : undefined;
-    console.warn('[messagingApi] upload-message-media invoke error:', error?.message, 'body:', errBody ?? data, error);
-    return null;
+  const data = await res.json().catch(() => ({})) as { url?: string; error?: string };
+  if (!res.ok) {
+    const msg = data?.error || res.statusText || 'Resim yüklenemedi.';
+    console.warn('[messagingApi] upload-message-media fetch error:', res.status, msg);
+    throw new Error(msg);
   }
-  if (!data?.url) {
-    console.warn('[messagingApi] upload-message-media data.url yok, data:', typeof data === 'object' ? JSON.stringify(data).slice(0, 200) : data);
-    return null;
+  const publicUrl = data?.url;
+  if (!publicUrl) {
+    console.warn('[messagingApi] upload-message-media url yok, data:', typeof data === 'object' ? JSON.stringify(data).slice(0, 200) : data);
+    throw new Error(data?.error || 'Resim yüklenemedi.');
   }
-  return data.url as string;
+  return publicUrl;
 }
 
-/** Personel resim mesajını storage'a yükler (authenticated). arrayBuffer: uriToArrayBuffer(uri) ile alınır. */
-export async function uploadImageMessageForStaff(arrayBuffer: ArrayBuffer, mimeType: string): Promise<string | null> {
+/** Personel resim mesajını storage'a yükler (authenticated). arrayBuffer: uriToArrayBuffer(uri) ile alınır. Hata durumunda throw eder. */
+export async function uploadImageMessageForStaff(arrayBuffer: ArrayBuffer, mimeType: string): Promise<string> {
   console.log('[messagingApi] uploadImageMessageForStaff: mimeType=', mimeType, 'size=', arrayBuffer?.byteLength);
   const binary = new Uint8Array(arrayBuffer);
   const ext = mimeType.includes('png') ? 'png' : 'jpg';
@@ -326,7 +652,7 @@ export async function uploadImageMessageForStaff(arrayBuffer: ArrayBuffer, mimeT
   });
   if (error) {
     console.warn('[messagingApi] uploadImageMessageForStaff storage error:', error?.message, error);
-    return null;
+    throw new Error(error?.message || 'Resim yüklenemedi.');
   }
   const { data: urlData } = supabase.storage.from(MESSAGE_MEDIA_BUCKET).getPublicUrl(fileName);
   return urlData.publicUrl;

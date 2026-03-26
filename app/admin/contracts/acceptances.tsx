@@ -161,7 +161,7 @@ export default function ContractAcceptances() {
   const loadGuestForPdf = async (guestId: string): Promise<GuestForPdf | null> => {
     const { data: guest, error } = await supabase
       .from('guests')
-      .select('full_name, phone, email, id_number, verified_at, created_at, signature_data, rooms(room_number), contract_templates(title, content)')
+      .select('full_name, phone, email, id_number, verified_at, created_at, signature_data, rooms(room_number), contract_templates(title, content), total_amount_net, nights_count, vat_amount, accommodation_tax_amount')
       .eq('id', guestId)
       .single();
     if (error || !guest) return null;

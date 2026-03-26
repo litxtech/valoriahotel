@@ -1,5 +1,5 @@
-import { useCallback } from 'react';
-import { View, TouchableOpacity, Text } from 'react-native';
+import { useCallback, useEffect } from 'react';
+import { View, TouchableOpacity, Text, StyleSheet, AppState } from 'react-native';
 import { Tabs, useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -9,8 +9,23 @@ import { useAuthStore } from '@/stores/authStore';
 import { useStaffUnreadMessagesStore } from '@/stores/staffUnreadMessagesStore';
 import { useStaffNotificationStore } from '@/stores/staffNotificationStore';
 import { useAdminWarningStore } from '@/stores/adminWarningStore';
+import { CachedImage } from '@/components/CachedImage';
 
 const TAB_ICON_SIZE = 24;
+const PROFILE_TAB_AVATAR_SIZE = 26;
+
+function StaffProfileTabIcon({ color, focused }: { color: string; focused: boolean }) {
+  const staff = useAuthStore((s) => s.staff);
+  const avatarUri = staff?.profile_image ?? null;
+  if (avatarUri) {
+    return (
+      <View style={[styles.tabAvatarWrap, { borderColor: focused ? theme.colors.primary : theme.colors.borderLight }]}>
+        <CachedImage uri={avatarUri} style={styles.tabAvatar} contentFit="cover" />
+      </View>
+    );
+  }
+  return <Ionicons name={focused ? 'person' : 'person-outline'} size={TAB_ICON_SIZE} color={color} />;
+}
 
 function NotificationBellHeaderButton() {
   const router = useRouter();
@@ -49,6 +64,21 @@ function NotificationBellHeaderButton() {
   );
 }
 
+function MapHeaderButton({ label }: { label: string }) {
+  const router = useRouter();
+  return (
+    <TouchableOpacity
+      onPress={() => router.push('/staff/map')}
+      style={{ marginRight: 8, padding: 4 }}
+      activeOpacity={0.8}
+      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+      accessibilityLabel={label}
+    >
+      <Ionicons name="map-outline" size={24} color={theme.colors.text} />
+    </TouchableOpacity>
+  );
+}
+
 export default function StaffTabsLayout() {
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
@@ -57,21 +87,34 @@ export default function StaffTabsLayout() {
   const staff = useAuthStore((s) => s.staff);
   const unreadCount = useStaffUnreadMessagesStore((s) => s.unreadCount);
   const refreshNotifications = useStaffNotificationStore((s) => s.refresh);
+  const refreshUnreadMessages = useStaffUnreadMessagesStore((s) => s.refreshUnread);
   const adminWarningCount = useAdminWarningStore((s) => s.count);
   const refreshAdminWarning = useAdminWarningStore((s) => s.refresh);
-
   useFocusEffect(
     useCallback(() => {
       if (!staff?.id) return () => {};
       refreshNotifications();
+      refreshUnreadMessages(staff.id);
       if (staff.role === 'admin') refreshAdminWarning(staff.id);
       const interval = setInterval(() => {
         refreshNotifications();
+        refreshUnreadMessages(staff.id);
         if (staff.role === 'admin') refreshAdminWarning(staff.id);
       }, 180000);
       return () => clearInterval(interval);
-    }, [staff?.id, staff?.role, refreshNotifications, refreshAdminWarning])
+    }, [staff?.id, staff?.role, refreshNotifications, refreshUnreadMessages, refreshAdminWarning])
   );
+
+  // Android: uygulama ön plana gelince tab rozetleri hemen güncellensin (ilgili sekmeye girmeden)
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state !== 'active' || !staff?.id) return;
+      refreshNotifications();
+      refreshUnreadMessages(staff.id);
+      if (staff.role === 'admin')       refreshAdminWarning(staff.id);
+    });
+    return () => sub.remove();
+  }, [staff?.id, staff?.role, refreshNotifications, refreshUnreadMessages, refreshAdminWarning]);
 
   return (
     <Tabs
@@ -108,7 +151,12 @@ export default function StaffTabsLayout() {
         },
         headerTintColor: theme.colors.primary,
         headerTitleStyle: { fontSize: 18, fontWeight: '800', color: theme.colors.text },
-        headerRight: () => <NotificationBellHeaderButton />,
+        headerRight: () => (
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <MapHeaderButton label={t('mapTab')} />
+            <NotificationBellHeaderButton />
+          </View>
+        ),
       }}
     >
       <Tabs.Screen
@@ -146,11 +194,19 @@ export default function StaffTabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="cameras"
+        options={{
+          title: 'Kamerlar',
+          headerTitle: 'Canlı kameralar',
+          href: null,
+        }}
+      />
+      <Tabs.Screen
         name="acceptances"
         options={{
-          title: 'Onaylar',
-          headerTitle: 'Sözleşme onayları – Oda ataması',
-          tabBarLabel: 'Onaylar',
+          title: t('acceptances'),
+          headerTitle: t('acceptancesHeader'),
+          tabBarLabel: t('acceptances'),
           tabBarIcon: ({ color, focused }) => (
             <Ionicons name={focused ? 'document-text' : 'document-text-outline'} size={TAB_ICON_SIZE} color={color} />
           ),
@@ -167,13 +223,7 @@ export default function StaffTabsLayout() {
       <Tabs.Screen
         name="misafir"
         options={{
-          title: t('guestTab'),
-          headerTitle: t('guestAppTitle'),
-          tabBarLabel: t('guestTab'),
-          tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'phone-portrait' : 'phone-portrait-outline'} size={TAB_ICON_SIZE} color={color} />
-          ),
-          href: staff?.role === 'admin' ? undefined : null,
+          href: null,
         }}
       />
       <Tabs.Screen
@@ -196,11 +246,23 @@ export default function StaffTabsLayout() {
           title: t('myProfile'),
           headerTitle: t('myProfile'),
           tabBarShowLabel: false,
-          tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'person' : 'person-outline'} size={TAB_ICON_SIZE} color={color} />
-          ),
+          tabBarIcon: ({ color, focused }) => <StaffProfileTabIcon color={color} focused={focused} />,
         }}
       />
     </Tabs>
   );
 }
+
+const styles = StyleSheet.create({
+  tabAvatarWrap: {
+    width: PROFILE_TAB_AVATAR_SIZE,
+    height: PROFILE_TAB_AVATAR_SIZE,
+    borderRadius: PROFILE_TAB_AVATAR_SIZE / 2,
+    borderWidth: 2,
+    overflow: 'hidden',
+  },
+  tabAvatar: {
+    width: '100%',
+    height: '100%',
+  },
+});

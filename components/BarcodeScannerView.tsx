@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Platform } from 'react-native';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { View, Text, StyleSheet, TouchableOpacity, Platform, Linking, AppState, ActivityIndicator } from 'react-native';
+import { CameraView, Camera } from 'expo-camera';
 
 /** Sadece sık kullanılan barkod tipleri — hepsini taramak kasılmaya yol açar */
 const BARCODE_TYPES = ['ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'code39', 'qr'] as const;
@@ -18,6 +18,8 @@ type BarcodeScannerViewProps = {
 
 const SCAN_THROTTLE_MS = 2200;
 
+type PermStatus = 'granted' | 'denied' | 'undetermined';
+
 export function BarcodeScannerView({
   onScan,
   onClose,
@@ -26,32 +28,54 @@ export function BarcodeScannerView({
   title = 'Barkod Okut',
   hint = 'Barkodu çerçeve içine getirin',
 }: BarcodeScannerViewProps) {
-  const [permission, requestPermission] = useCameraPermissions();
+  const [permStatus, setPermStatus] = useState<PermStatus | null>(null);
+  const [canAskAgain, setCanAskAgain] = useState(true);
+  const [requesting, setRequesting] = useState(false);
   const [scanned, setScanned] = useState(false);
   const [lastData, setLastData] = useState<string | null>(null);
   const [cameraMounted, setCameraMounted] = useState(false);
   const lastScanTime = useRef(0);
 
-  useEffect(() => {
-    let cancelled = false;
-    if (!permission) return;
-    if (permission.granted) {
-      const delay = Platform.OS === 'android' ? 400 : 150;
-      const t = setTimeout(() => {
-        if (!cancelled) setCameraMounted(true);
-      }, delay);
-      return () => {
-        cancelled = true;
-        clearTimeout(t);
-      };
+  const refreshPermission = useCallback(async () => {
+    try {
+      const p = await Camera.getCameraPermissionsAsync();
+      setPermStatus(p.status as PermStatus);
+      setCanAskAgain(p.canAskAgain ?? true);
+    } catch {
+      setPermStatus('undetermined');
+      setCanAskAgain(true);
     }
-    setCameraMounted(false);
-    return () => { cancelled = true; };
-  }, [permission?.granted]);
+  }, []);
 
   useEffect(() => {
-    if (permission?.granted) return;
-    requestPermission();
+    refreshPermission();
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') refreshPermission();
+    });
+    return () => sub.remove();
+  }, [refreshPermission]);
+
+  useEffect(() => {
+    if (permStatus !== 'granted') {
+      setCameraMounted(false);
+      return;
+    }
+    const delay = Platform.OS === 'android' ? 400 : 150;
+    const t = setTimeout(() => setCameraMounted(true), delay);
+    return () => clearTimeout(t);
+  }, [permStatus]);
+
+  const handleRequestPermission = useCallback(async () => {
+    setRequesting(true);
+    try {
+      const result = await Camera.requestCameraPermissionsAsync();
+      setPermStatus(result.status as PermStatus);
+      setCanAskAgain(result.canAskAgain ?? true);
+    } catch {
+      setPermStatus('undetermined');
+    } finally {
+      setRequesting(false);
+    }
   }, []);
 
   const handleBarCodeScanned = useCallback(
@@ -73,27 +97,57 @@ export function BarcodeScannerView({
     setLastData(null);
   };
 
-  if (!permission) {
+  if (permStatus === null) {
     return (
       <View style={styles.centered}>
+        <ActivityIndicator size="small" color="#b8860b" />
         <Text style={styles.message}>Kamera izni kontrol ediliyor...</Text>
       </View>
     );
   }
 
-  if (!permission.granted) {
+  if (permStatus !== 'granted') {
     return (
       <View style={styles.centered}>
-        <Text style={styles.title}>{title}</Text>
-        <Text style={styles.subtitle}>Barkod okutmak için kamera izni gerekiyor.</Text>
-        <TouchableOpacity style={styles.button} onPress={requestPermission}>
-          <Text style={styles.buttonText}>Kamera İzni Ver</Text>
-        </TouchableOpacity>
-        {showCloseButton && onClose && (
-          <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
-            <Text style={styles.closeBtnText}>Kapat</Text>
+        <View style={styles.permCard}>
+          <View style={styles.permCardHeader}>
+            <View style={styles.permCardIconWrap}>
+              <Text style={styles.permCardIcon}>📷</Text>
+            </View>
+            <View style={styles.permCardTitleWrap}>
+              <Text style={styles.permCardTitle}>{title}</Text>
+              <Text style={styles.permCardSubtitle}>
+                Barkod okutmak için kamera izni gerekiyor. QR kod, EAN, UPC vb. taranabilir.
+              </Text>
+            </View>
+            <View style={[styles.permCardBadge, permStatus === 'denied' && styles.permCardBadgeDenied]}>
+              <Text style={[styles.permCardBadgeText, permStatus === 'denied' && styles.permCardBadgeTextDenied]}>
+                {permStatus === 'denied' ? 'Kapalı' : 'İstenmedi'}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.permCardNotes}>
+            <Text style={styles.permCardNote}>• "Devam" derseniz sistem izin penceresi açılır.</Text>
+            <Text style={styles.permCardNote}>• Daha önce reddedildiyse ayarlardan kamera iznini açmanız gerekir.</Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.permCardPrimaryBtn, requesting && { opacity: 0.75 }]}
+            onPress={canAskAgain ? handleRequestPermission : () => Linking.openSettings()}
+            disabled={requesting}
+            activeOpacity={0.85}
+          >
+            {requesting ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <>
+                <Text style={styles.permCardPrimaryIcon}>{canAskAgain ? '✓' : '⚙'}</Text>
+                <Text style={styles.permCardPrimaryText}>
+                  {canAskAgain ? 'Devam' : 'Ayarları aç'}
+                </Text>
+              </>
+            )}
           </TouchableOpacity>
-        )}
+        </View>
       </View>
     );
   }
@@ -149,17 +203,83 @@ const styles = StyleSheet.create({
     backgroundColor: '#1a365d',
     padding: 24,
   },
-  title: { fontSize: 20, fontWeight: '700', color: '#fff', marginBottom: 8 },
-  subtitle: { fontSize: 14, color: 'rgba(255,255,255,0.8)', textAlign: 'center', marginBottom: 24 },
-  message: { fontSize: 16, color: '#fff' },
-  button: {
-    backgroundColor: '#b8860b',
-    paddingHorizontal: 24,
-    paddingVertical: 14,
-    borderRadius: 10,
+  message: { fontSize: 16, color: '#fff', marginTop: 12 },
+  permCard: {
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+    padding: 16,
+    width: '100%',
+    maxWidth: 360,
   },
-  buttonText: { color: '#fff', fontWeight: '700', fontSize: 16 },
-  closeBtn: { marginTop: 16 },
+  permCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginBottom: 12,
+  },
+  permCardIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: 'rgba(184,134,11,0.3)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  permCardIcon: { fontSize: 22 },
+  permCardTitleWrap: { flex: 1, minWidth: 0 },
+  permCardTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#fff',
+    marginBottom: 4,
+  },
+  permCardSubtitle: {
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.85)',
+    lineHeight: 18,
+  },
+  permCardBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+  },
+  permCardBadgeDenied: { backgroundColor: 'rgba(239,68,68,0.3)' },
+  permCardBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.9)',
+  },
+  permCardBadgeTextDenied: { color: '#fca5a5' },
+  permCardNotes: {
+    backgroundColor: 'rgba(0,0,0,0.2)',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 14,
+  },
+  permCardNote: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.8)',
+    lineHeight: 18,
+  },
+  permCardPrimaryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    backgroundColor: '#b8860b',
+    borderRadius: 14,
+    paddingVertical: 14,
+  },
+  permCardPrimaryIcon: { fontSize: 18, color: '#fff', fontWeight: '700' },
+  permCardPrimaryText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 15,
+  },
+  closeBtn: { marginTop: 20 },
   closeBtnText: { color: 'rgba(255,255,255,0.9)', fontSize: 16 },
   overlay: {
     ...StyleSheet.absoluteFillObject,

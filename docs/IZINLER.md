@@ -11,8 +11,7 @@ Uygulama aşağıdaki izinleri kullanır. iOS’ta her izin için kullanıcıya 
 | **Kamera** | "Sözleşme onayı için QR kod okutmanız gerekiyor." | QR kod okutma, check-in / sözleşme akışı |
 | **Fotoğraf Galerisi** | "Profil ve belge yükleme için galeri erişimi." | Profil fotoğrafı, belge (kimlik vb.) yükleme |
 | **Konum (uygulama kullanılırken)** | "Otele yaklaştığınızda check-in bildirimi göstermek için konum kullanılır." | Harita, otel yakınına gelince bildirim |
-| **Konum (her zaman)** | "Otel bölgesine girdiğinizde otomatik hoş geldiniz bildirimi için konum kullanılır." | Arka planda geofence (otel bölgesi) |
-| **Face ID** | "Sözleşme onayında kimlik doğrulama için Face ID kullanılır." | Sözleşme / güvenli onay (biyometrik) |
+| **Konum (uygulama kullanılırken)** | "Uygulama açıkken oteli haritada göstermek ve otele yaklaştığınızda check-in için kolaylık sunmak üzere konum kullanılır." | Harita ve check-in için yakınlık |
 | **NFC** | "Dijital anahtar ile kapıyı açmak için NFC kullanılır." | Dijital anahtar, kapı okuyucusu ile etkileşim |
 
 ---
@@ -23,9 +22,7 @@ Uygulama aşağıdaki izinleri kullanır. iOS’ta her izin için kullanıcıya 
 |------|----------|----------------------|
 | **CAMERA** | Kamera | QR okutma, fotoğraf çekme |
 | **ACCESS_FINE_LOCATION** | Hassas konum | Harita, otel yakınında bildirim |
-| **ACCESS_BACKGROUND_LOCATION** | Arka planda konum | Otel bölgesine girince arka planda bildirim (geofence) |
-| **USE_BIOMETRIC** | Biyometrik (parmak izi / yüz) | Sözleşme onayı, güvenli giriş |
-| **USE_FINGERPRINT** | Parmak izi (eski API) | Eski cihazlarda biyometrik |
+| **USE_FINGERPRINT** | Parmak izi (biyometrik) | Sözleşme onayı / güvenli doğrulama |
 | **NFC** | NFC | Dijital anahtar ile kapı açma |
 
 Android’de bu izinler için **runtime** (çalışma anında) onay istenebilir; kullanıcı reddederse ilgili özellik devre dışı kalır (örn. konum kapalıysa geofence çalışmaz).

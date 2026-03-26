@@ -17,6 +17,10 @@ export type GuestForPdf = {
   signature_data?: string | null;
   rooms: { room_number: string } | null;
   contract_templates: { title: string; content: string } | null;
+  total_amount_net?: number | null;
+  nights_count?: number | null;
+  vat_amount?: number | null;
+  accommodation_tax_amount?: number | null;
 };
 
 function escapeHtml(s: string): string {
@@ -25,6 +29,10 @@ function escapeHtml(s: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function fmtMoney(n: number): string {
+  return new Intl.NumberFormat('tr-TR', { style: 'decimal', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
 }
 
 export function buildContractHtml(guest: GuestForPdf): string {
@@ -44,6 +52,16 @@ export function buildContractHtml(guest: GuestForPdf): string {
     ? `<img src="${guest.signature_data}" alt="İmza" style="max-width:280px;height:auto;margin-top:16px;" />`
     : '<p style="color:#64748b;font-style:italic;">Onay web veya uygulama üzerinden alındı; dijital imza görseli kayıtlı değil.</p>';
 
+  const nightsLine =
+    guest.nights_count != null && guest.nights_count > 0
+      ? `<p><strong>Konaklama süresi:</strong> ${guest.nights_count} gece</p>`
+      : '';
+  const totalNet = guest.total_amount_net != null ? Number(guest.total_amount_net) : null;
+  const priceLine =
+    totalNet != null && totalNet >= 0
+      ? `<p><strong>Toplam konaklama bedeli (net):</strong> ${fmtMoney(totalNet)} ₺</p>`
+      : '';
+
   return `
 <!DOCTYPE html>
 <html>
@@ -59,7 +77,7 @@ export function buildContractHtml(guest: GuestForPdf): string {
   </style>
 </head>
 <body>
-  <h1>VALORIA HOTEL – ${title}</h1>
+  <h1>Valoria Hotel – ${title}</h1>
   <div class="info">
     <p><strong>Misafir:</strong> ${name}</p>
     <p><strong>Telefon:</strong> ${phone}</p>
@@ -67,6 +85,8 @@ export function buildContractHtml(guest: GuestForPdf): string {
     <p><strong>Kimlik No:</strong> ${idNo}</p>
     <p><strong>Oda:</strong> ${room}</p>
     <p><strong>Onay Tarihi:</strong> ${date}</p>
+    ${nightsLine}
+    ${priceLine}
   </div>
   <div class="contract">${content}</div>
   <div class="signature">

@@ -17,6 +17,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/authStore';
 import { uriToArrayBuffer, getMimeAndExt } from '@/lib/uploadMedia';
+import { ensureCameraPermission } from '@/lib/cameraPermission';
+import { ensureMediaLibraryPermission } from '@/lib/mediaLibraryPermission';
 import { theme } from '@/constants/theme';
 import { CachedImage } from '@/components/CachedImage';
 
@@ -69,11 +71,12 @@ export default function NewExpenseScreen() {
   };
 
   const takePhoto = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('İzin', 'Fiş fotoğrafı için kamera erişimi gerekli.');
-      return;
-    }
+    const granted = await ensureCameraPermission({
+      title: 'Kamera izni',
+      message: 'Fiş fotoğrafı çekmek için kamera erişimi gerekiyor.',
+      settingsMessage: 'Kamera izni kapalı. Fiş fotoğrafı için ayarlardan izin verin.',
+    });
+    if (!granted) return;
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
@@ -92,9 +95,12 @@ export default function NewExpenseScreen() {
   };
 
   const pickFromGallery = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('İzin', 'Galeri erişimi gerekli.');
+    const granted = await ensureMediaLibraryPermission({
+      title: 'Galeri izni',
+      message: 'Fis fotografi secmek icin galeri erisimi istiyoruz.',
+      settingsMessage: 'Galeri izni kapali. Fis fotografi icin ayarlardan izin verin.',
+    });
+    if (!granted) {
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({

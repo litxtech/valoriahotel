@@ -8,6 +8,7 @@ import {
   Platform,
   ActivityIndicator,
   Image,
+  ScrollView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -28,10 +29,11 @@ const DEFAULT_GOOGLE_PLAY = 'https://play.google.com/store/apps';
 const DEFAULT_APP_STORE = 'https://apps.apple.com';
 
 /** Sözleşme doldurulurken seçilen dile göre success + mağaza metinleri */
-const SUCCESS_TEXTS: Record<string, { title: string; subtitle: string; downloadApp: string; downloadAppSubtitle: string; buttonDone: string; googlePlay: string; appStore: string; android: string; iphoneIpad: string }> = {
+const SUCCESS_TEXTS: Record<string, { title: string; subtitle: string; signedButton: string; downloadApp: string; downloadAppSubtitle: string; buttonDone: string; googlePlay: string; appStore: string; android: string; iphoneIpad: string }> = {
   tr: {
     title: 'Kayıt Tamamlandı',
     subtitle: 'Seçilen sözleşmeniz onaylandı. Resepsiyona bekleyebilirsiniz.',
+    signedButton: 'İmzalanmıştır',
     downloadApp: 'Uygulamayı indir',
     downloadAppSubtitle: 'Otele özel uygulama ile iletişim ve hizmetlere kolayca ulaşın.',
     buttonDone: 'Tamam',
@@ -43,6 +45,7 @@ const SUCCESS_TEXTS: Record<string, { title: string; subtitle: string; downloadA
   en: {
     title: 'Registration Complete',
     subtitle: 'Your selected agreement has been confirmed. You may proceed to reception.',
+    signedButton: 'Signed',
     downloadApp: 'Download the app',
     downloadAppSubtitle: 'Easily reach communication and services with the hotel app.',
     buttonDone: 'OK',
@@ -54,6 +57,7 @@ const SUCCESS_TEXTS: Record<string, { title: string; subtitle: string; downloadA
   ar: {
     title: 'اكتمل التسجيل',
     subtitle: 'تم تأكيد الاتفاقية المختارة. يمكنك التوجه إلى الاستقبال.',
+    signedButton: 'تم التوقيع',
     downloadApp: 'تحميل التطبيق',
     downloadAppSubtitle: 'تواصل مع الفندق وخدماته بسهولة عبر التطبيق.',
     buttonDone: 'موافق',
@@ -65,6 +69,7 @@ const SUCCESS_TEXTS: Record<string, { title: string; subtitle: string; downloadA
   de: {
     title: 'Registrierung abgeschlossen',
     subtitle: 'Ihre ausgewählte Vereinbarung wurde bestätigt. Sie können zur Rezeption gehen.',
+    signedButton: 'Unterzeichnet',
     downloadApp: 'App herunterladen',
     downloadAppSubtitle: 'Kommunikation und Services einfach mit der Hotel-App nutzen.',
     buttonDone: 'OK',
@@ -76,6 +81,7 @@ const SUCCESS_TEXTS: Record<string, { title: string; subtitle: string; downloadA
   fr: {
     title: 'Inscription terminée',
     subtitle: 'Votre contrat sélectionné a été confirmé. Vous pouvez vous présenter à la réception.',
+    signedButton: 'Signé',
     downloadApp: 'Télécharger l\'application',
     downloadAppSubtitle: 'Accédez facilement à la communication et aux services avec l\'app de l\'hôtel.',
     buttonDone: 'OK',
@@ -87,6 +93,7 @@ const SUCCESS_TEXTS: Record<string, { title: string; subtitle: string; downloadA
   ru: {
     title: 'Регистрация завершена',
     subtitle: 'Ваше выбранное соглашение подтверждено. Можете пройти на стойку регистрации.',
+    signedButton: 'Подписано',
     downloadApp: 'Скачать приложение',
     downloadAppSubtitle: 'Связь и услуги отеля — легко через приложение.',
     buttonDone: 'OK',
@@ -98,6 +105,7 @@ const SUCCESS_TEXTS: Record<string, { title: string; subtitle: string; downloadA
   es: {
     title: 'Registro completado',
     subtitle: 'Tu acuerdo seleccionado ha sido confirmado. Puedes dirigirte a recepción.',
+    signedButton: 'Firmado',
     downloadApp: 'Descargar la aplicación',
     downloadAppSubtitle: 'Comunicación y servicios del hotel de forma fácil con la app.',
     buttonDone: 'OK',
@@ -113,7 +121,7 @@ const appLogo = require('../../assets/icon.png');
 export default function SuccessScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { reset, contractLang } = useGuestFlowStore();
+  const { reset, contractLang, signedFormLines } = useGuestFlowStore();
   const lang = (contractLang ?? 'tr').toLowerCase();
   const texts = SUCCESS_TEXTS[lang] ?? SUCCESS_TEXTS.tr;
 
@@ -150,11 +158,29 @@ export default function SuccessScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 24 }]}>
-      <View style={styles.iconWrap}>
-        <Text style={styles.icon}>✓</Text>
-      </View>
-      <Text style={styles.title}>{texts.title}</Text>
-      <Text style={styles.subtitle}>{texts.subtitle}</Text>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.iconWrap}>
+          <Text style={styles.icon}>✓</Text>
+        </View>
+        <Text style={styles.title}>{texts.title}</Text>
+        <Text style={styles.subtitle}>{texts.subtitle}</Text>
+
+        {signedFormLines && signedFormLines.length > 0 && (
+          <View style={styles.signedCard}>
+            {signedFormLines.map((line, i) => (
+              <Text key={i} style={styles.signedLine}>
+                {line}
+              </Text>
+            ))}
+            <View style={styles.signedButtonWrap}>
+              <Text style={styles.signedButtonText}>{texts.signedButton}</Text>
+            </View>
+          </View>
+        )}
 
       {loading ? (
         <ActivityIndicator size="small" color={COLORS.accent} style={styles.loader} />
@@ -195,6 +221,7 @@ export default function SuccessScreen() {
       <TouchableOpacity style={styles.button} onPress={done} activeOpacity={0.85}>
         <Text style={styles.buttonText}>{texts.buttonDone}</Text>
       </TouchableOpacity>
+      </ScrollView>
     </View>
   );
 }
@@ -204,8 +231,11 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.bg,
     paddingHorizontal: 24,
-    justifyContent: 'flex-start',
+  },
+  scroll: { flex: 1 },
+  scrollContent: {
     alignItems: 'center',
+    paddingBottom: 24,
   },
   iconWrap: {
     width: 72,
@@ -292,6 +322,34 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     textAlign: 'center',
     marginTop: 12,
+  },
+  signedCard: {
+    width: '100%',
+    backgroundColor: COLORS.card,
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: COLORS.cardBorder,
+  },
+  signedLine: {
+    fontSize: 14,
+    color: COLORS.text,
+    marginBottom: 8,
+    lineHeight: 20,
+  },
+  signedButtonWrap: {
+    marginTop: 16,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: COLORS.success,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  signedButtonText: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#ffffff',
   },
   button: {
     backgroundColor: COLORS.accent,

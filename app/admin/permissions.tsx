@@ -24,9 +24,9 @@ const DEVICE_PERMISSIONS = [
     key: 'location',
     icon: 'location-outline' as const,
     title: 'Konum',
-    reason: 'Otele yaklaştığınızda check-in bildirimi; otel bölgesine girdiğinizde hoş geldiniz bildirimi.',
-    ios: 'NSLocationWhenInUseUsageDescription, NSLocationAlwaysAndWhenInUseUsageDescription',
-    android: 'ACCESS_FINE_LOCATION, ACCESS_COARSE_LOCATION, ACCESS_BACKGROUND_LOCATION',
+    reason: 'Uygulama açıkken oteli haritada göstermek ve otele yaklaştığınızda check-in için kolaylık sunmak üzere konum kullanılır.',
+    ios: 'NSLocationWhenInUseUsageDescription',
+    android: 'ACCESS_FINE_LOCATION',
   },
   {
     key: 'notifications',
@@ -35,22 +35,6 @@ const DEVICE_PERMISSIONS = [
     reason: 'Anlık bildirimler (mesaj, rezervasyon, acil duyuru).',
     ios: 'Push Notifications',
     android: 'expo-notifications',
-  },
-  {
-    key: 'biometric',
-    icon: 'finger-print-outline' as const,
-    title: 'Biyometri (Face ID / Parmak izi)',
-    reason: 'Sözleşme onayında kimlik doğrulama.',
-    ios: 'NSFaceIDUsageDescription',
-    android: 'USE_BIOMETRIC, USE_FINGERPRINT',
-  },
-  {
-    key: 'microphone',
-    icon: 'mic-outline' as const,
-    title: 'Mikrofon',
-    reason: 'Sesli mesaj veya arama özellikleri için (gelecekte kullanılabilir).',
-    ios: '(Opsiyonel)',
-    android: 'RECORD_AUDIO',
   },
 ];
 
@@ -63,6 +47,7 @@ const STAFF_APP_PERMISSIONS = [
   { key: 'gorev_ata', label: 'Görev atayabilir', desc: 'Diğer personel için görev oluşturma.' },
   { key: 'personel_ekle', label: 'Personel ekleyebilir', desc: 'Yeni çalışan hesabı oluşturma (genelde yönetici).' },
   { key: 'raporlar', label: 'Raporları görebilir', desc: 'Raporlar ve HMB raporlarına erişim.' },
+  { key: 'tum_sozlesmeler', label: 'Tüm sözleşmeleri görüntüleyebilir', desc: 'Tüm müşteri sözleşmelerine tarih filtresiyle erişim; telefon ve WhatsApp iletişim.' },
 ];
 
 /** Geçiş kontrolü yetkileri */
@@ -101,13 +86,17 @@ function PermissionRow({
 export default function AdminPermissionsScreen() {
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.intro}>
-        Uygulamanın kullandığı ve alınması gereken tüm izinler aşağıda listelenmiştir.
-      </Text>
+      <View style={styles.hero}>
+        <Text style={styles.heroTitle}>Izin ve Yetki Mimarisi</Text>
+        <Text style={styles.intro}>
+          Bu ekran cihaz izinleri, personel uygulama yetkileri ve gecis kontrolu yetkilerini tek bir profesyonel
+          referans olarak sunar.
+        </Text>
+      </View>
 
-      <Text style={styles.sectionTitle}>📱 Cihaz / uygulama izinleri</Text>
+      <Text style={styles.sectionTitle}>Cihaz / uygulama izinleri</Text>
       <Text style={styles.sectionDesc}>
-        Bu izinler kullanıcıdan (iOS/Android) veya app.json / infoPlist ile istenir.
+        Bu izinler iOS/Android sisteminden alinir. Istem metinleri app.json ve plugin konfiglerinde tanimlanir.
       </Text>
       {DEVICE_PERMISSIONS.map((p) => (
         <PermissionRow
@@ -119,7 +108,7 @@ export default function AdminPermissionsScreen() {
         />
       ))}
 
-      <Text style={styles.sectionTitle}>👤 Personel uygulama yetkileri</Text>
+      <Text style={styles.sectionTitle}>Personel uygulama yetkileri</Text>
       <Text style={styles.sectionDesc}>
         Admin panelinden çalışan düzenlerken atanır (staff.app_permissions). Çalışan ekle / düzenle ekranında checkbox olarak görünür.
       </Text>
@@ -130,7 +119,7 @@ export default function AdminPermissionsScreen() {
         </View>
       ))}
 
-      <Text style={styles.sectionTitle}>🔐 Geçiş kontrolü yetkileri</Text>
+      <Text style={styles.sectionTitle}>Gecis kontrolu yetkileri</Text>
       <Text style={styles.sectionDesc}>
         Kapılar, kartlar ve personel-kapı eşleştirmesi. Geçiş kontrolü menüsünden yönetilir.
       </Text>
@@ -143,7 +132,8 @@ export default function AdminPermissionsScreen() {
 
       <View style={styles.footer}>
         <Text style={styles.footerText}>
-          İzin metinleri app.json (iOS infoPlist, Android permissions) ve expo plugin’lerinde tanımlıdır.
+          Not: Cihaz izni "verildi/kapali" gibi durumlar canli kullanici ekraninda takip edilir; bu ekran ise yonetsel
+          dokumantasyon amaclidir.
         </Text>
       </View>
     </ScrollView>
@@ -158,6 +148,20 @@ const styles = StyleSheet.create({
   content: {
     padding: 20,
     paddingBottom: 48,
+  },
+  hero: {
+    backgroundColor: adminTheme.colors.surface,
+    borderWidth: 1,
+    borderColor: adminTheme.colors.border,
+    borderRadius: adminTheme.radius.lg,
+    padding: 14,
+    marginBottom: 8,
+  },
+  heroTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: adminTheme.colors.text,
+    marginBottom: 8,
   },
   intro: {
     fontSize: 15,

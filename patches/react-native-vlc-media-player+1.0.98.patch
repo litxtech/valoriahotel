@@ -1,0 +1,70 @@
+diff --git a/node_modules/react-native-vlc-media-player/android/src/main/java/com/yuanzhou/vlc/vlcplayer/ReactVlcPlayerView.java b/node_modules/react-native-vlc-media-player/android/src/main/java/com/yuanzhou/vlc/vlcplayer/ReactVlcPlayerView.java
+index 8c7acdf..596c521 100644
+--- a/node_modules/react-native-vlc-media-player/android/src/main/java/com/yuanzhou/vlc/vlcplayer/ReactVlcPlayerView.java
++++ b/node_modules/react-native-vlc-media-player/android/src/main/java/com/yuanzhou/vlc/vlcplayer/ReactVlcPlayerView.java
+@@ -356,6 +356,8 @@ class ReactVlcPlayerView extends TextureView implements
+             boolean isNetwork = srcMap.hasKey("isNetwork") ? srcMap.getBoolean("isNetwork") : false;
+             boolean autoplay = srcMap.hasKey("autoplay") ? srcMap.getBoolean("autoplay") : true;
+             int initType = srcMap.hasKey("initType") ? srcMap.getInt("initType") : 1;
++            final String rtspUser = srcMap.hasKey("rtspUser") ? srcMap.getString("rtspUser") : null;
++            final String rtspPassword = srcMap.hasKey("rtspPassword") ? srcMap.getString("rtspPassword") : null;
+             ReadableArray mediaOptions = srcMap.hasKey("mediaOptions") ? srcMap.getArray("mediaOptions") : null;
+             ReadableArray initOptions = srcMap.hasKey("initOptions") ? srcMap.getArray("initOptions") : null;
+             Integer hwDecoderEnabled = srcMap.hasKey("hwDecoderEnabled") ? srcMap.getInt("hwDecoderEnabled") : null;
+@@ -393,7 +395,9 @@ class ReactVlcPlayerView extends TextureView implements
+                 
+                 @Override
+                 public void onDisplay(Dialog.LoginDialog dialog) {
+-                    // Handle login dialogs if needed
++                    if (rtspUser != null && rtspPassword != null) {
++                        dialog.postLogin(rtspUser, rtspPassword, false);
++                    }
+                 }
+                 
+                 @Override
+diff --git a/node_modules/react-native-vlc-media-player/ios/RCTVLCPlayer/RCTVLCPlayer.m b/node_modules/react-native-vlc-media-player/ios/RCTVLCPlayer/RCTVLCPlayer.m
+index 54e29ee..010bcf2 100644
+--- a/node_modules/react-native-vlc-media-player/ios/RCTVLCPlayer/RCTVLCPlayer.m
++++ b/node_modules/react-native-vlc-media-player/ios/RCTVLCPlayer/RCTVLCPlayer.m
+@@ -9,6 +9,7 @@
+ #import <MobileVLCKit/MobileVLCKit.h>
+ #endif
+ #import <AVFoundation/AVFoundation.h>
++#import <objc/message.h>
+ static NSString *const statusKeyPath = @"status";
+ static NSString *const playbackLikelyToKeepUpKeyPath = @"playbackLikelyToKeepUp";
+ static NSString *const playbackBufferEmptyKeyPath = @"playbackBufferEmpty";
+@@ -30,6 +31,8 @@ static NSString *const playbackRate = @"rate";
+ 
+     NSDictionary * _videoInfo;
+     NSString * _subtitleUri;
++    NSString * _rtspUser;
++    NSString * _rtspPassword;
+ 
+     BOOL _paused;
+     BOOL _autoplay;
+@@ -97,6 +100,8 @@ static NSString *const playbackRate = @"rate";
+     NSURL* uri = [NSURL URLWithString:uriString];
+     int initType = [source objectForKey:@"initType"];
+     NSDictionary* initOptions = [source objectForKey:@"initOptions"];
++    _rtspUser = [source objectForKey:@"rtspUser"];
++    _rtspPassword = [source objectForKey:@"rtspPassword"];
+     
+     // Get acceptInvalidCertificates from source
+     _acceptInvalidCertificates = [[source objectForKey:@"acceptInvalidCertificates"] boolValue];
+@@ -448,7 +453,14 @@ static NSString *const playbackRate = @"rate";
+            defaultUsername:(NSString *)username
+           askingForStorage:(BOOL)askingForStorage
+              withReference:(NSValue *)reference {
+-    NSLog(@"VLC Login - Title: %@, Message: %@", title, message);
++    if ([_rtspUser isKindOfClass:[NSString class]] && [_rtspPassword isKindOfClass:[NSString class]] && _rtspUser.length > 0 && _rtspPassword.length > 0) {
++        SEL sel = NSSelectorFromString(@"postLoginWithUsername:password:store:forDialogReference:");
++        if ([self.dialogProvider respondsToSelector:sel]) {
++            void (*msgSend)(id, SEL, NSString *, NSString *, BOOL, NSValue *) = (void (*)(id, SEL, NSString *, NSString *, BOOL, NSValue *))objc_msgSend;
++            msgSend(self.dialogProvider, sel, _rtspUser, _rtspPassword, NO, reference);
++            return;
++        }
++    }
+     if (self.onVideoError) {
+         self.onVideoError(@{
+             @"target": self.reactTag,

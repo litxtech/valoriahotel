@@ -8,16 +8,19 @@ import {
   RefreshControl,
   ActivityIndicator,
   Image,
+  Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@/stores/authStore';
 import {
+  staffDeleteConversation,
   staffListConversations,
   subscribeToConversationList,
 } from '@/lib/messagingApi';
 import type { ConversationWithMeta } from '@/lib/messaging';
 import { MESSAGING_COLORS } from '@/lib/messaging';
 import { CachedImage } from '@/components/CachedImage';
+import { SwipeToDelete } from '@/components/SwipeToDelete';
 
 function formatTime(iso: string | null): string {
   if (!iso) return '';
@@ -56,6 +59,26 @@ export default function AdminMessagesScreen() {
     };
   }, [staff?.id]);
 
+  const handleDeleteConversation = (item: ConversationWithMeta) => {
+    if (!staff?.id) return;
+    const name = item.name || 'Sohbet';
+    Alert.alert('Sohbeti sil', `"${name}" sohbetini listenizden kaldırmak istiyor musunuz?`, [
+      { text: 'İptal', style: 'cancel' },
+      {
+        text: 'Sil',
+        style: 'destructive',
+        onPress: async () => {
+          const { error } = await staffDeleteConversation(item.id, staff.id);
+          if (error) {
+            Alert.alert('Hata', error);
+            return;
+          }
+          setConversations((prev) => prev.filter((c) => c.id !== item.id));
+        },
+      },
+    ]);
+  };
+
   if (!staff) return null;
 
   if (loading && conversations.length === 0) {
@@ -87,27 +110,29 @@ export default function AdminMessagesScreen() {
           </View>
         }
         renderItem={({ item }) => (
-          <TouchableOpacity
-            style={styles.row}
-            onPress={() => router.push({ pathname: '/admin/messages/chat/[id]', params: { id: item.id } })}
-            activeOpacity={0.7}
-          >
-            <View style={styles.avatar}>
-              {item.avatar ? (
-                <CachedImage uri={item.avatar} style={styles.avatarImg} contentFit="cover" />
-              ) : (
-                <Text style={styles.avatarText}>{(item.name || 'Sohbet').charAt(0)}</Text>
+          <SwipeToDelete onSwipeDelete={() => handleDeleteConversation(item)}>
+            <TouchableOpacity
+              style={styles.row}
+              onPress={() => router.push({ pathname: '/admin/messages/chat/[id]', params: { id: item.id } })}
+              activeOpacity={0.7}
+            >
+              <View style={styles.avatar}>
+                {(item.type === 'direct' ? item.other_avatar : item.avatar) ? (
+                  <CachedImage uri={(item.type === 'direct' ? item.other_avatar : item.avatar) as string} style={styles.avatarImg} contentFit="cover" />
+                ) : (
+                  <Text style={styles.avatarText}>{(item.name || 'Sohbet').charAt(0)}</Text>
+                )}
+              </View>
+              <View style={styles.rowBody}>
+                <Text style={styles.rowTitle} numberOfLines={1}>{item.name || 'Sohbet'}</Text>
+                <Text style={styles.rowPreview} numberOfLines={1}>{item.last_message_preview || '—'}</Text>
+              </View>
+              <Text style={styles.rowTime}>{formatTime(item.last_message_at ?? null)}</Text>
+              {(item.unread_count ?? 0) > 0 && (
+                <View style={styles.badge}><Text style={styles.badgeText}>{item.unread_count}</Text></View>
               )}
-            </View>
-            <View style={styles.rowBody}>
-              <Text style={styles.rowTitle} numberOfLines={1}>{item.name || 'Sohbet'}</Text>
-              <Text style={styles.rowPreview} numberOfLines={1}>{item.last_message_preview || '—'}</Text>
-            </View>
-            <Text style={styles.rowTime}>{formatTime(item.last_message_at ?? null)}</Text>
-            {(item.unread_count ?? 0) > 0 && (
-              <View style={styles.badge}><Text style={styles.badgeText}>{item.unread_count}</Text></View>
-            )}
-          </TouchableOpacity>
+            </TouchableOpacity>
+          </SwipeToDelete>
         )}
       />
     </View>

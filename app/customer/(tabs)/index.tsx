@@ -16,19 +16,36 @@ import {
   Alert,
   TextInput,
   ActivityIndicator,
+  Keyboard,
 } from 'react-native';
-import { useRouter, useNavigation } from 'expo-router';
+import { useRouter, useNavigation, useFocusEffect } from 'expo-router';
 import { Video, Audio } from 'expo-av';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/authStore';
 import { useScrollToTopStore } from '@/stores/scrollToTopStore';
 import { theme } from '@/constants/theme';
+import { formatRelative } from '@/lib/date';
 import { StaffNameWithBadge, AvatarWithBadge } from '@/components/VerifiedBadge';
 import { Skeleton, SkeletonCard } from '@/components/ui/Skeleton';
 import { getOrCreateGuestForCurrentSession } from '@/lib/getOrCreateGuestForCaller';
-import { notifyAdmins } from '@/lib/notificationService';
+import { notifyAdmins, sendNotification } from '@/lib/notificationService';
 import { CachedImage } from '@/components/CachedImage';
+import { formatDistanceToNow } from 'date-fns';
+import { tr } from 'date-fns/locale';
+import { KeyboardAvoidingView } from 'react-native';
+import { blockUserForGuest, getHiddenUsersForGuest } from '@/lib/userBlocks';
+import { POST_TAGS, type PostTagValue } from '@/lib/feedPostTags';
+
+type CustomerCommentRow = {
+  id: string;
+  staff_id?: string | null;
+  guest_id?: string | null;
+  content: string;
+  created_at: string;
+  staff: { full_name: string | null; profile_image?: string | null } | null;
+  guest: { full_name: string | null; photo_url?: string | null } | null;
+};
 
 const REPORT_REASONS: { value: string; label: string }[] = [
   { value: 'spam', label: 'Spam / tekrarlayan içerik' },
@@ -50,6 +67,12 @@ type StaffRow = {
   verification_badge?: 'blue' | 'yellow' | null;
 };
 
+type GuestRow = {
+  id: string;
+  full_name: string | null;
+  photo_url: string | null;
+};
+
 type HotelInfoRow = {
   id: string;
   name: string | null;
@@ -65,8 +88,14 @@ type FeedPost = {
   thumbnail_url: string | null;
   title: string | null;
   created_at: string;
+  staff_id: string | null;
+  guest_id: string | null;
+  post_tag?: string | null;
+  lat?: number | null;
+  lng?: number | null;
+  location_label?: string | null;
   staff: { full_name: string | null; department: string | null; profile_image?: string | null; verification_badge?: 'blue' | 'yellow' | null } | null;
-  guest: { full_name: string | null } | null;
+  guest: { full_name: string | null; photo_url?: string | null } | null;
 };
 
 type MyRoom = {
@@ -100,6 +129,7 @@ export default function CustomerHome() {
   const router = useRouter();
   const { user } = useAuthStore();
   const [activeStaff, setActiveStaff] = useState<StaffRow[]>([]);
+  const [activeGuests, setActiveGuests] = useState<GuestRow[]>([]);
   const [hotelInfo, setHotelInfo] = useState<HotelInfoRow | null>(null);
   const [feedPosts, setFeedPosts] = useState<FeedPost[]>([]);
   const [myRoom, setMyRoom] = useState<MyRoom | null>(null);
@@ -113,10 +143,25 @@ export default function CustomerHome() {
   } | null>(null);
   const [fullscreenVideoReady, setFullscreenVideoReady] = useState(false);
   const [menuPostId, setMenuPostId] = useState<string | null>(null);
+  const [myGuestId, setMyGuestId] = useState<string | null>(null);
+  const [deletingPostId, setDeletingPostId] = useState<string | null>(null);
   const [reportPost, setReportPost] = useState<FeedPost | null>(null);
   const [reportReason, setReportReason] = useState('');
   const [reportDetails, setReportDetails] = useState('');
   const [submittingReport, setSubmittingReport] = useState(false);
+  const [likeCounts, setLikeCounts] = useState<Record<string, number>>({});
+  const [commentCounts, setCommentCounts] = useState<Record<string, number>>({});
+  const [myLikes, setMyLikes] = useState<Set<string>>(new Set());
+  const [commentsByPost, setCommentsByPost] = useState<Record<string, CustomerCommentRow[]>>({});
+  const [commentText, setCommentText] = useState<Record<string, string>>({});
+  const [commentsSheetPostId, setCommentsSheetPostId] = useState<string | null>(null);
+  const [commentSheetKeyboardH, setCommentSheetKeyboardH] = useState(0);
+  const [feedTagFilter, setFeedTagFilter] = useState<PostTagValue | null>(null);
+  const [guestsExpanded, setGuestsExpanded] = useState(true);
+  const [tagFiltersExpanded, setTagFiltersExpanded] = useState(true);
+  const filteredPosts = feedTagFilter ? feedPosts.filter((p) => (p.post_tag ?? null) === feedTagFilter) : feedPosts;
+  const [togglingLike, setTogglingLike] = useState<string | null>(null);
+  const [postingComment, setPostingComment] = useState<string | null>(null);
   const fullscreenVideoRef = useRef<Video>(null);
   const { width: winWidth, height: winHeight } = useWindowDimensions();
   const scrollRef = useRef<ScrollView>(null);
@@ -166,12 +211,19 @@ export default function CustomerHome() {
   }, [fullscreenPostMedia?.uri, fullscreenPostMedia?.mediaType]);
 
   const load = useCallback(async () => {
-    const [staffRes, hotelRes, feedRes, facilitiesRes] = await Promise.all([
+    const guestRow = user ? await getOrCreateGuestForCurrentSession() : null;
+    setMyGuestId(guestRow?.guest_id ?? null);
+    const hidden = guestRow?.guest_id
+      ? await getHiddenUsersForGuest(guestRow.guest_id)
+      : { hiddenStaffIds: new Set<string>(), hiddenGuestIds: new Set<string>() };
+
+    const [staffRes, hotelRes, guestsRes, feedRes, facilitiesRes] = await Promise.all([
       (async () => {
         const { data } = await supabase
           .from('staff')
           .select('id, full_name, department, profile_image, is_online, last_active, work_status, verification_badge, email')
           .eq('is_active', true)
+          .is('deleted_at', null)
           .order('is_online', { ascending: false })
           .order('last_active', { ascending: false });
         const rows = (data ?? []) as (StaffRow & { email?: string | null })[];
@@ -184,17 +236,80 @@ export default function CustomerHome() {
       })(),
       supabase.from('hotel_info').select('id, name, description, address, stars').limit(1).maybeSingle(),
       supabase
+        .from('guests')
+        .select('id, full_name, photo_url, banned_until')
+        .not('auth_user_id', 'is', null)
+        .is('deleted_at', null)
+        .order('updated_at', { ascending: false })
+        .limit(30),
+      supabase
         .from('feed_posts')
-        .select('id, media_type, media_url, thumbnail_url, title, created_at, staff:staff_id(full_name, department, profile_image, verification_badge), guest:guest_id(full_name)')
+        .select('id, media_type, media_url, thumbnail_url, title, created_at, staff_id, guest_id, post_tag, lat, lng, location_label, staff:staff_id(full_name, department, profile_image, verification_badge, deleted_at), guest:guest_id(full_name, photo_url, deleted_at)')
         .eq('visibility', 'customers')
         .order('created_at', { ascending: false })
         .limit(10),
       supabase.from('facilities').select('name, icon').eq('is_active', true).order('sort_order').limit(6),
     ]);
-    setActiveStaff(staffRes.data ?? []);
+    setActiveStaff((staffRes.data ?? []).filter((s) => !hidden.hiddenStaffIds.has(s.id)));
     setHotelInfo(hotelRes.data ?? null);
-    setFeedPosts(feedRes.data ?? []);
+    const now = new Date().toISOString();
+    const allGuests = ((guestsRes.data ?? []) as (GuestRow & { banned_until?: string | null })[]).filter(
+      (g) => !hidden.hiddenGuestIds.has(g.id) && (!g.banned_until || g.banned_until < now)
+    );
+    setActiveGuests(allGuests.map(({ banned_until: _, ...g }) => g));
+    const posts = ((feedRes.data ?? []) as FeedPost[]).filter(
+      (p) =>
+        !(p.staff_id && hidden.hiddenStaffIds.has(p.staff_id)) &&
+        !(p.guest_id && hidden.hiddenGuestIds.has(p.guest_id)) &&
+        !(p.staff_id && (p.staff as { deleted_at?: string | null } | null)?.deleted_at) &&
+        !(p.guest_id && (p.guest as { deleted_at?: string | null } | null)?.deleted_at)
+    );
+    setFeedPosts(posts);
     setFacilities(facilitiesRes.data ?? []);
+    const guestId = guestRow?.guest_id ?? null;
+    const ids = posts.map((p) => p.id);
+    if (ids.length > 0) {
+      const [reactionsRes, commentsRes, myReactionsRes] = await Promise.all([
+        supabase.from('feed_post_reactions').select('post_id').in('post_id', ids),
+        supabase.from('feed_post_comments').select('post_id, id, staff_id, guest_id, content, created_at, staff:staff_id(full_name, profile_image, deleted_at), guest:guest_id(full_name, photo_url, deleted_at)').in('post_id', ids).order('created_at', { ascending: true }),
+        guestId ? supabase.from('feed_post_reactions').select('post_id').in('post_id', ids).eq('guest_id', guestId) : Promise.resolve({ data: [] as { post_id: string }[] }),
+      ]);
+      const reactions = (reactionsRes.data ?? []) as { post_id: string }[];
+      const comments = (commentsRes.data ?? []) as (CustomerCommentRow & { post_id: string })[];
+      const myReactions = (myReactionsRes.data ?? []) as { post_id: string }[];
+      const likeCount: Record<string, number> = {};
+      reactions.forEach((r) => { likeCount[r.post_id] = (likeCount[r.post_id] ?? 0) + 1; });
+      const commentCount: Record<string, number> = {};
+      const byPost: Record<string, CustomerCommentRow[]> = {};
+      comments.forEach((c) => {
+        if ((c.staff_id && hidden.hiddenStaffIds.has(c.staff_id)) || (c.guest_id && hidden.hiddenGuestIds.has(c.guest_id))) return;
+        if ((c.staff_id && (c.staff as { deleted_at?: string | null } | null)?.deleted_at) || (c.guest_id && (c.guest as { deleted_at?: string | null } | null)?.deleted_at)) return;
+        commentCount[c.post_id] = (commentCount[c.post_id] ?? 0) + 1;
+        if (!byPost[c.post_id]) byPost[c.post_id] = [];
+        byPost[c.post_id].push({
+          id: c.id,
+          staff_id: c.staff_id ?? null,
+          guest_id: c.guest_id ?? null,
+          content: c.content,
+          created_at: c.created_at,
+          staff: c.staff,
+          guest: c.guest,
+        });
+      });
+      setLikeCounts(likeCount);
+      setCommentCounts(commentCount);
+      setMyLikes(new Set(myReactions.map((r) => r.post_id)));
+      setCommentsByPost(byPost);
+      if (guestId) {
+        const viewRows = ids.map((post_id) => ({ post_id, guest_id: guestId }));
+        supabase.from('feed_post_views').upsert(viewRows, { onConflict: 'post_id,guest_id', ignoreDuplicates: true }).then(() => {});
+      }
+    } else {
+      setLikeCounts({});
+      setCommentCounts({});
+      setMyLikes(new Set());
+      setCommentsByPost({});
+    }
 
     if (user?.email) {
       const { data: guest } = await supabase
@@ -241,12 +356,250 @@ export default function CustomerHome() {
     load().then(() => setLoading(false));
   }, [load]);
 
+  useFocusEffect(
+    useCallback(() => {
+      load();
+      return () => {};
+    }, [load])
+  );
+
+  // Android: yorum modalında klavye açılınca input klavyenin üstünde kalsın (manuel padding)
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !commentsSheetPostId) return;
+    const show = Keyboard.addListener('keyboardDidShow', (e) => setCommentSheetKeyboardH(e.endCoordinates.height));
+    const hide = Keyboard.addListener('keyboardDidHide', () => setCommentSheetKeyboardH(0));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, [commentsSheetPostId]);
+
+  useEffect(() => {
+    if (!commentsSheetPostId) setCommentSheetKeyboardH(0);
+  }, [commentsSheetPostId]);
+
+  const toggleLike = useCallback(async (postId: string, authorStaffId: string | null, authorGuestId: string | null) => {
+    const guestRow = await getOrCreateGuestForCurrentSession();
+    if (!guestRow?.guest_id) {
+      Alert.alert('Giriş gerekli', 'Beğenmek için giriş yapın.');
+      return;
+    }
+    setTogglingLike(postId);
+    try {
+      const liked = myLikes.has(postId);
+      if (liked) {
+        await supabase.from('feed_post_reactions').delete().eq('post_id', postId).eq('guest_id', guestRow.guest_id);
+        setMyLikes((prev) => {
+          const next = new Set(prev);
+          next.delete(postId);
+          return next;
+        });
+        setLikeCounts((prev) => ({ ...prev, [postId]: Math.max(0, (prev[postId] ?? 1) - 1) }));
+      } else {
+        await supabase.from('feed_post_reactions').insert({ post_id: postId, guest_id: guestRow.guest_id, reaction: 'like' });
+        setMyLikes((prev) => new Set(prev).add(postId));
+        setLikeCounts((prev) => ({ ...prev, [postId]: (prev[postId] ?? 0) + 1 }));
+        const displayName = getDisplayName() || 'Bir misafir';
+        if (authorStaffId) {
+          await sendNotification({
+            staffId: authorStaffId,
+            title: 'Yeni beğeni',
+            body: `${displayName} paylaşımını beğendi.`,
+            category: 'staff',
+            notificationType: 'feed_like',
+            data: { screen: 'staff_feed', url: '/staff', postId },
+          });
+        } else if (authorGuestId) {
+          await sendNotification({
+            guestId: authorGuestId,
+            title: 'Yeni beğeni',
+            body: `${displayName} paylaşımını beğendi.`,
+            category: 'guest',
+            notificationType: 'feed_like',
+            data: { screen: 'customer_feed', url: '/customer/feed/' + postId, postId },
+          });
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+    setTogglingLike(null);
+  }, [myLikes]);
+
+  const submitComment = useCallback(async (postId: string, authorStaffId: string | null, authorGuestId: string | null) => {
+    const guestRow = await getOrCreateGuestForCurrentSession();
+    if (!guestRow?.guest_id) {
+      Alert.alert('Giriş gerekli', 'Yorum yapmak için giriş yapın.');
+      return;
+    }
+    const text = (commentText[postId] ?? '').trim();
+    if (!text) return;
+    setPostingComment(postId);
+    try {
+      const { data: inserted } = await supabase
+        .from('feed_post_comments')
+        .insert({ post_id: postId, guest_id: guestRow.guest_id, content: text })
+        .select('id, content, created_at')
+        .single();
+      setCommentText((prev) => ({ ...prev, [postId]: '' }));
+      const displayName = getDisplayName() || 'Misafir';
+      const newComment: CustomerCommentRow = {
+        id: (inserted as { id: string }).id,
+        content: text,
+        created_at: (inserted as { created_at: string }).created_at,
+        staff: null,
+        guest: { full_name: displayName },
+      };
+      setCommentsByPost((prev) => ({
+        ...prev,
+        [postId]: [...(prev[postId] ?? []), newComment],
+      }));
+      setCommentCounts((prev) => ({ ...prev, [postId]: (prev[postId] ?? 0) + 1 }));
+      const notifyBody = `${displayName}: ${text.slice(0, 60)}${text.length > 60 ? '…' : ''}`;
+      if (authorStaffId) {
+        await sendNotification({
+          staffId: authorStaffId,
+          title: 'Yeni yorum',
+          body: notifyBody,
+          category: 'staff',
+          notificationType: 'feed_comment',
+          data: { screen: 'staff_feed', url: '/staff', postId },
+        });
+      } else if (authorGuestId) {
+        await sendNotification({
+          guestId: authorGuestId,
+          title: 'Yeni yorum',
+          body: notifyBody,
+          category: 'guest',
+          notificationType: 'feed_comment',
+          data: { screen: 'customer_feed', url: '/customer/feed/' + postId, postId },
+        });
+      }
+    } catch (e) {
+      // ignore
+    }
+    setPostingComment(null);
+  }, [commentText]);
+
+  const deleteOwnComment = useCallback(async (postId: string, commentId: string) => {
+    const guestRow = await getOrCreateGuestForCurrentSession();
+    if (!guestRow?.guest_id) return;
+    Alert.alert('Yorumu sil', 'Bu yorum kalıcı olarak silinecek.', [
+      { text: 'İptal', style: 'cancel' },
+      {
+        text: 'Sil',
+        style: 'destructive',
+        onPress: async () => {
+          const { error } = await supabase
+            .from('feed_post_comments')
+            .delete()
+            .eq('id', commentId)
+            .eq('guest_id', guestRow.guest_id);
+          if (error) {
+            Alert.alert('Hata', error.message || 'Yorum silinemedi.');
+            return;
+          }
+          setCommentsByPost((prev) => ({
+            ...prev,
+            [postId]: (prev[postId] ?? []).filter((c) => c.id !== commentId),
+          }));
+          setCommentCounts((prev) => ({ ...prev, [postId]: Math.max(0, (prev[postId] ?? 1) - 1) }));
+        },
+      },
+    ]);
+  }, []);
+
   const openReportModal = (post: FeedPost) => {
     setMenuPostId(null);
     setReportPost(post);
     setReportReason('');
     setReportDetails('');
   };
+
+  const handleDeleteOwnPost = useCallback(async (post: FeedPost) => {
+    const guestRow = await getOrCreateGuestForCurrentSession();
+    if (!guestRow?.guest_id || post.guest_id !== guestRow.guest_id) return;
+    Alert.alert('Paylaşımı sil', 'Bu paylaşım kalıcı olarak silinecek.', [
+      { text: 'İptal', style: 'cancel' },
+      {
+        text: 'Sil',
+        style: 'destructive',
+        onPress: async () => {
+          setMenuPostId(null);
+          setDeletingPostId(post.id);
+          const { error } = await supabase.from('feed_posts').delete().eq('id', post.id);
+          setDeletingPostId(null);
+          if (error) {
+            Alert.alert('Hata', error.message || 'Paylaşım silinemedi.');
+            return;
+          }
+          setFeedPosts((prev) => prev.filter((p) => p.id !== post.id));
+          setLikeCounts((prev) => {
+            const n = { ...prev };
+            delete n[post.id];
+            return n;
+          });
+          setCommentCounts((prev) => {
+            const n = { ...prev };
+            delete n[post.id];
+            return n;
+          });
+          setMyLikes((prev) => {
+            const n = new Set(prev);
+            n.delete(post.id);
+            return n;
+          });
+          setCommentsByPost((prev) => {
+            const n = { ...prev };
+            delete n[post.id];
+            return n;
+          });
+          if (commentsSheetPostId === post.id) setCommentsSheetPostId(null);
+        },
+      },
+    ]);
+  }, [commentsSheetPostId]);
+
+  const handleBlockUser = useCallback(async (post: FeedPost) => {
+    const guestRow = await getOrCreateGuestForCurrentSession();
+    if (!guestRow?.guest_id) {
+      Alert.alert('Giriş gerekli', 'Kullanıcı engellemek için giriş yapın.');
+      return;
+    }
+    const targetStaffId = post.staff_id ?? null;
+    const targetGuestId = post.guest_id ?? null;
+    if (targetGuestId && targetGuestId === guestRow.guest_id) {
+      Alert.alert('Uyarı', 'Kendinizi engelleyemezsiniz.');
+      return;
+    }
+    const targetType = targetStaffId ? 'staff' : targetGuestId ? 'guest' : null;
+    const targetId = targetStaffId ?? targetGuestId;
+    if (!targetType || !targetId) return;
+    const rawStaff = post.staff as { full_name?: string | null } | null;
+    const rawGuest = post.guest as { full_name?: string | null } | null;
+    const targetName = (rawStaff?.full_name ?? rawGuest?.full_name ?? 'Bu kullanıcı').trim() || 'Bu kullanıcı';
+
+    Alert.alert('Kullanıcıyı engelle', `${targetName} artık sizi göremez ve siz de onu göremezsiniz.`, [
+      { text: 'İptal', style: 'cancel' },
+      {
+        text: 'Engelle',
+        style: 'destructive',
+        onPress: async () => {
+          const { error } = await blockUserForGuest({
+            blockerGuestId: guestRow.guest_id,
+            blockedType: targetType,
+            blockedId: targetId,
+          });
+          if (error && error.code !== '23505') {
+            Alert.alert('Hata', error.message || 'Kullanıcı engellenemedi.');
+            return;
+          }
+          setMenuPostId(null);
+          await load();
+        },
+      },
+    ]);
+  }, [load]);
 
   const submitReport = async () => {
     if (!reportPost || !reportReason.trim()) return;
@@ -305,7 +658,13 @@ export default function CustomerHome() {
             <Skeleton key={i} width={56} height={56} borderRadius={12} style={{ marginRight: 12 }} />
           ))}
         </View>
-        <Text style={styles.sectionTitle}>Aktif çalışanlar</Text>
+        <Text style={styles.sectionTitle}>Personeller</Text>
+        <View style={{ flexDirection: 'row', gap: 16, marginBottom: 24 }}>
+          {[1, 2, 3, 4].map((i) => (
+            <Skeleton key={i} width={72} height={72} borderRadius={36} />
+          ))}
+        </View>
+        <Text style={styles.sectionTitle}>Misafirler</Text>
         <View style={{ flexDirection: 'row', gap: 16, marginBottom: 24 }}>
           {[1, 2, 3, 4].map((i) => (
             <Skeleton key={i} width={72} height={72} borderRadius={36} />
@@ -336,12 +695,12 @@ export default function CustomerHome() {
         </View>
       </View>
 
-      {/* Aktif çalışanlar - avatarlar aynı boyut, ortalanmış */}
-      <Text style={styles.sectionLabel}>Aktif personel</Text>
+      {/* Personeller - kart stili */}
+      <Text style={styles.sectionLabel}>Personeller</Text>
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.storyRow}
+        contentContainerStyle={styles.staffCardsRow}
         style={styles.storyScroll}
       >
         {activeStaff.map((staff) => {
@@ -349,36 +708,85 @@ export default function CustomerHome() {
           return (
             <TouchableOpacity
               key={staff.id}
-              style={styles.storyItem}
+              style={styles.staffCard}
               onPress={() => router.push(`/customer/staff/${staff.id}`)}
-              activeOpacity={0.8}
+              activeOpacity={0.85}
             >
-              <View style={[styles.storyRing, { borderColor: statusColor }]}>
-                <AvatarWithBadge badge={staff.verification_badge ?? null} avatarSize={72} badgeSize={14}>
-                  <CachedImage
-                    uri={staff.profile_image || 'https://via.placeholder.com/64'}
-                    style={styles.storyAvatar}
-                    contentFit="cover"
+              <View style={styles.staffCardInner}>
+                <View style={styles.staffCardRing}>
+                  <AvatarWithBadge badge={staff.verification_badge ?? null} avatarSize={68} badgeSize={14}>
+                    {staff.profile_image ? (
+                      <CachedImage uri={staff.profile_image} style={styles.staffCardAvatar} contentFit="cover" />
+                    ) : (
+                      <View style={[styles.staffCardAvatar, styles.staffCardPlaceholder]}>
+                        <Text style={styles.staffCardLetter}>{(staff.full_name || 'P').charAt(0).toUpperCase()}</Text>
+                      </View>
+                    )}
+                  </AvatarWithBadge>
+                  {staff.is_online ? (
+                    <Animated.View style={[styles.statusDot, styles.statusDotOnline, { backgroundColor: theme.colors.success, opacity: onlineBlinkOpacity }]} />
+                  ) : (
+                    <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
+                  )}
+                </View>
+                <View style={styles.staffCardTextBlock}>
+                  <StaffNameWithBadge
+                    name={staff.full_name?.split(' ')[0] || 'Personel'}
+                    badge={staff.verification_badge ?? null}
+                    textStyle={styles.staffCardName}
                   />
-                </AvatarWithBadge>
-                {staff.is_online ? (
-                  <Animated.View style={[styles.statusDot, styles.statusDotOnline, { backgroundColor: theme.colors.success, opacity: onlineBlinkOpacity }]} />
-                ) : (
-                  <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
-                )}
-              </View>
-              <View style={styles.storyTextBlock}>
-                <StaffNameWithBadge
-                  name={staff.full_name?.split(' ')[0] || 'Personel'}
-                  badge={staff.verification_badge ?? null}
-                  textStyle={styles.storyName}
-                />
-                <Text style={styles.storyDept} numberOfLines={1}>{staff.department || '—'}</Text>
+                  <Text style={styles.staffCardDept} numberOfLines={1}>{staff.department || '—'}</Text>
+                </View>
               </View>
             </TouchableOpacity>
           );
         })}
       </ScrollView>
+
+      {/* Yeni kayıt olmuş misafirler */}
+      <View style={styles.collapseSection}>
+        <TouchableOpacity style={styles.collapseHeader} onPress={() => setGuestsExpanded(!guestsExpanded)} activeOpacity={0.7}>
+          <Text style={[styles.sectionLabel, { marginTop: theme.spacing.lg, marginBottom: 0 }]}>Misafirler</Text>
+          <Ionicons name={guestsExpanded ? 'chevron-up' : 'chevron-down'} size={22} color={theme.colors.primary} />
+        </TouchableOpacity>
+        {guestsExpanded && (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.staffCardsRow}
+            style={styles.storyScroll}
+          >
+            {activeGuests.map((guest) => {
+              const name = (guest.full_name ?? 'Misafir').trim() || 'Misafir';
+              const firstName = name.split(' ')[0] || 'Misafir';
+              return (
+                <TouchableOpacity
+                  key={`guest-${guest.id}`}
+                  style={styles.staffCard}
+                  onPress={() => router.push(`/customer/guest/${guest.id}`)}
+                  activeOpacity={0.85}
+                >
+                  <View style={styles.staffCardInner}>
+                    <View style={styles.staffCardRing}>
+                      {guest.photo_url ? (
+                        <CachedImage uri={guest.photo_url} style={styles.staffCardAvatar} contentFit="cover" />
+                      ) : (
+                        <View style={[styles.staffCardAvatar, styles.staffCardPlaceholder]}>
+                          <Text style={styles.staffCardLetter}>{firstName.charAt(0).toUpperCase()}</Text>
+                        </View>
+                      )}
+                    </View>
+                    <View style={styles.staffCardTextBlock}>
+                      <Text style={styles.staffCardName} numberOfLines={1}>{firstName}</Text>
+                      <Text style={styles.staffCardDept} numberOfLines={1}>Misafir</Text>
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        )}
+      </View>
 
       {/* Paylaşımlar (feed) */}
       <View style={styles.sectionTitleRow}>
@@ -388,27 +796,66 @@ export default function CustomerHome() {
           <Text style={styles.shareBtnText}>Paylaş</Text>
         </TouchableOpacity>
       </View>
-      {feedPosts.length === 0 ? (
+      <View style={styles.collapseSection}>
+        <TouchableOpacity style={styles.collapseHeader} onPress={() => setTagFiltersExpanded(!tagFiltersExpanded)} activeOpacity={0.7}>
+          <Text style={styles.collapseLabel}>Etiket filtreleri</Text>
+          <Ionicons name={tagFiltersExpanded ? 'chevron-up' : 'chevron-down'} size={22} color={theme.colors.primary} />
+        </TouchableOpacity>
+        {tagFiltersExpanded && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.feedTagFilters} contentContainerStyle={styles.feedTagFiltersContent}>
+            <TouchableOpacity
+              style={[styles.feedTagBtn, !feedTagFilter && styles.feedTagBtnActive]}
+              onPress={() => setFeedTagFilter(null)}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.feedTagBtnText, !feedTagFilter && styles.feedTagBtnTextActive]}>Tümü</Text>
+            </TouchableOpacity>
+            {POST_TAGS.map((tag) => (
+              <TouchableOpacity
+                key={tag.value}
+                style={[styles.feedTagBtn, feedTagFilter === tag.value && styles.feedTagBtnActive]}
+                onPress={() => setFeedTagFilter(feedTagFilter === tag.value ? null : tag.value)}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.feedTagBtnText, feedTagFilter === tag.value && styles.feedTagBtnTextActive]}>{tag.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        )}
+      </View>
+      {filteredPosts.length === 0 ? (
         <View style={styles.emptyFeed}>
-          <Text style={styles.emptyFeedText}>Henüz paylaşım yok.</Text>
+          <Text style={styles.emptyFeedText}>
+            {feedTagFilter ? `${POST_TAGS.find((t) => t.value === feedTagFilter)?.label ?? feedTagFilter} etiketli paylaşım yok.` : 'Henüz paylaşım yok.'}
+          </Text>
         </View>
       ) : (
         <View style={styles.feedList}>
-          {feedPosts.slice(0, 5).map((post) => {
+          {filteredPosts.slice(0, 20).map((post) => {
             const rawStaff = post.staff as { full_name?: string; department?: string; profile_image?: string | null; verification_badge?: 'blue' | 'yellow' | null } | null;
             const rawGuest = post.guest;
             const staffInfo = Array.isArray(rawStaff) ? rawStaff[0] ?? null : rawStaff;
-            const guestInfo = Array.isArray(rawGuest) ? (rawGuest[0] as { full_name?: string | null } | null) ?? null : (rawGuest as { full_name?: string | null } | null);
+            const guestInfo = Array.isArray(rawGuest) ? (rawGuest[0] as { full_name?: string | null; photo_url?: string | null } | null) ?? null : (rawGuest as { full_name?: string | null; photo_url?: string | null } | null);
             const authorName = (staffInfo?.full_name ?? guestInfo?.full_name ?? 'Misafir').trim() || 'Misafir';
             const dept = staffInfo?.department;
             const badge = staffInfo?.verification_badge ?? null;
-            const profileImage = staffInfo?.profile_image;
+            const profileImage = staffInfo?.profile_image ?? guestInfo?.photo_url ?? null;
             const isGuest = !staffInfo && (guestInfo || !rawStaff);
             const imageUri = post.media_type !== 'text' ? (post.thumbnail_url || post.media_url) : null;
             const hasMedia = !!imageUri;
             const avatarLetter = authorName.charAt(0).toUpperCase();
+            const hasLocation = (post.lat != null && post.lng != null) || (post.location_label && post.location_label.trim());
             return (
               <View key={post.id} style={styles.feedItem}>
+                <View style={styles.feedItemAccent} />
+                {hasLocation && (
+                  <View style={styles.feedLocationBar}>
+                    <Ionicons name="location" size={14} color={theme.colors.primary} />
+                    <Text style={styles.feedLocationText} numberOfLines={1}>
+                      {post.location_label?.trim() || '📍 Haritadan paylaşıldı'}
+                    </Text>
+                  </View>
+                )}
                 <View style={styles.feedItemHeader}>
                   {profileImage ? (
                     <CachedImage uri={profileImage} style={styles.feedAvatar} contentFit="cover" />
@@ -423,17 +870,40 @@ export default function CustomerHome() {
                     ) : (
                       <Text style={styles.feedAuthorName} numberOfLines={1}>{authorName}</Text>
                     )}
-                    {dept ? <Text style={styles.feedItemMeta}>{dept}</Text> : isGuest ? <Text style={styles.feedItemMeta}>Misafir</Text> : null}
+                    <View style={styles.feedItemMetaRow}>
+                      {dept ? <Text style={styles.feedItemMeta}>{dept}</Text> : isGuest ? <Text style={styles.feedItemMeta}>Misafir</Text> : null}
+                      {post.created_at ? (
+                        <Text style={styles.feedItemDate}>{formatRelative(post.created_at)}</Text>
+                      ) : null}
+                    </View>
                   </View>
                   {user ? (
-                    <TouchableOpacity
-                      style={styles.feedMenuBtn}
-                      onPress={() => setMenuPostId(menuPostId === post.id ? null : post.id)}
-                      hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                      activeOpacity={0.7}
-                    >
-                      <Ionicons name="ellipsis-vertical" size={20} color={theme.colors.textMuted} />
-                    </TouchableOpacity>
+                    <View style={styles.feedHeaderActions}>
+                      {myGuestId && post.guest_id === myGuestId ? (
+                        <TouchableOpacity
+                          style={styles.feedDeleteHeaderBtn}
+                          onPress={() => handleDeleteOwnPost(post)}
+                          disabled={deletingPostId === post.id}
+                          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                          activeOpacity={0.7}
+                        >
+                          {deletingPostId === post.id ? (
+                            <ActivityIndicator size="small" color={theme.colors.error} />
+                          ) : (
+                            <Ionicons name="trash-outline" size={20} color={theme.colors.error} />
+                          )}
+                        </TouchableOpacity>
+                      ) : (
+                        <TouchableOpacity
+                          style={styles.feedMenuBtn}
+                          onPress={() => setMenuPostId(menuPostId === post.id ? null : post.id)}
+                          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                          activeOpacity={0.7}
+                        >
+                          <Ionicons name="ellipsis-vertical" size={20} color={theme.colors.textMuted} />
+                        </TouchableOpacity>
+                      )}
+                    </View>
                   ) : null}
                 </View>
                 <Modal
@@ -444,6 +914,14 @@ export default function CustomerHome() {
                 >
                   <Pressable style={styles.menuModalOverlay} onPress={() => setMenuPostId(null)}>
                     <View style={styles.menuModalBox}>
+                      <TouchableOpacity
+                        style={styles.menuModalItem}
+                        onPress={() => handleBlockUser(post)}
+                        activeOpacity={0.7}
+                      >
+                        <Ionicons name="ban-outline" size={22} color={theme.colors.error} />
+                        <Text style={[styles.menuModalItemText, { color: theme.colors.error }]}>Engelle</Text>
+                      </TouchableOpacity>
                       <TouchableOpacity
                         style={styles.menuModalItem}
                         onPress={() => openReportModal(post)}
@@ -505,15 +983,152 @@ export default function CustomerHome() {
                       {post.media_type === 'video' ? 'Video' : 'Fotoğraf'}
                     </Text>
                   ) : null}
+                  <View style={styles.feedActionsRow}>
+                    {user ? (
+                      <TouchableOpacity
+                        style={styles.feedActionBtn}
+                        onPress={() => toggleLike(post.id, post.staff_id ?? null, post.guest_id ?? null)}
+                        disabled={togglingLike === post.id}
+                        activeOpacity={0.7}
+                      >
+                        {togglingLike === post.id ? (
+                          <ActivityIndicator size="small" color={theme.colors.textMuted} />
+                        ) : (
+                          <Ionicons
+                            name={myLikes.has(post.id) ? 'heart' : 'heart-outline'}
+                            size={22}
+                            color={myLikes.has(post.id) ? theme.colors.error : theme.colors.text}
+                          />
+                        )}
+                        <Text style={styles.feedActionCount}>{likeCounts[post.id] ?? 0}</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                    <TouchableOpacity
+                      style={styles.feedActionBtn}
+                      onPress={() => setCommentsSheetPostId(commentsSheetPostId === post.id ? null : post.id)}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="chatbubble-outline" size={20} color={theme.colors.text} />
+                      <Text style={styles.feedActionCount}>{commentCounts[post.id] ?? 0}</Text>
+                    </TouchableOpacity>
+                    {Platform.OS !== 'android' ? (
+                      <TouchableOpacity
+                        style={styles.feedActionBtn}
+                        onPress={() => router.push(`/customer/feed/${post.id}`)}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={styles.feedDetailLink}>Detay</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
                 </View>
               </View>
             );
           })}
-          <TouchableOpacity onPress={() => {}} style={styles.showAllBtn}>
-            <Text style={styles.showAllText}>Tümünü göster</Text>
-          </TouchableOpacity>
+            <TouchableOpacity onPress={() => router.push('/customer/feed/' + filteredPosts[0].id)} style={styles.showAllBtn}>
+              <Text style={styles.showAllText}>Tümünü göster</Text>
+            </TouchableOpacity>
         </View>
       )}
+
+      {/* Yorum kartı */}
+      <Modal
+        visible={!!commentsSheetPostId}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setCommentsSheetPostId(null)}
+      >
+        <Pressable style={styles.commentSheetOverlay} onPress={() => setCommentsSheetPostId(null)}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.commentSheetKeyboard}
+          >
+            <Pressable
+              style={[styles.commentSheetCard, Platform.OS === 'android' && commentSheetKeyboardH > 0 && { paddingBottom: commentSheetKeyboardH + 24 }]}
+              onPress={(e) => e.stopPropagation()}
+            >
+              <View style={styles.commentSheetHeader}>
+                <Text style={styles.commentSheetTitle}>Yorumlar</Text>
+                <TouchableOpacity onPress={() => setCommentsSheetPostId(null)} hitSlop={16}>
+                  <Ionicons name="close" size={24} color={theme.colors.text} />
+                </TouchableOpacity>
+              </View>
+              {commentsSheetPostId && (() => {
+                const post = feedPosts.find((p) => p.id === commentsSheetPostId);
+                const comments = commentsByPost[commentsSheetPostId] ?? [];
+                if (!post) return null;
+                return (
+                  <>
+                    <ScrollView
+                      style={styles.commentSheetScroll}
+                      contentContainerStyle={styles.commentSheetScrollContent}
+                      keyboardShouldPersistTaps="handled"
+                      showsVerticalScrollIndicator={false}
+                    >
+                      {comments.length === 0 ? (
+                        <Text style={styles.commentSheetEmpty}>Henüz yorum yok. İlk yorumu sen yap.</Text>
+                      ) : (
+                        comments.map((c) => {
+                          const authorName = (c.staff?.full_name ?? c.guest?.full_name ?? '—').trim() || '—';
+                          const avatarUri = c.staff?.profile_image ?? c.guest?.photo_url ?? null;
+                          const canDelete = !!(myGuestId && c.guest_id && c.guest_id === myGuestId && !c.staff_id);
+                          return (
+                            <View key={c.id} style={styles.commentSheetRow}>
+                              {avatarUri ? (
+                                <CachedImage uri={avatarUri} style={styles.commentSheetAvatar} contentFit="cover" />
+                              ) : (
+                                <View style={styles.commentSheetAvatarPlaceholder}>
+                                  <Text style={styles.commentSheetAvatarInitial}>{(authorName || '—').charAt(0).toUpperCase()}</Text>
+                                </View>
+                              )}
+                              <View style={styles.commentSheetRowBody}>
+                                <Text style={styles.commentSheetAuthor}>{authorName}</Text>
+                                <Text style={styles.commentSheetText}>{c.content}</Text>
+                                <View style={styles.commentSheetMetaRow}>
+                                  <Text style={styles.commentSheetTime}>{formatDistanceToNow(new Date(c.created_at), { addSuffix: true, locale: tr })}</Text>
+                                  {canDelete ? (
+                                    <TouchableOpacity onPress={() => deleteOwnComment(post.id, c.id)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                                      <Text style={styles.commentDeleteText}>Sil</Text>
+                                    </TouchableOpacity>
+                                  ) : null}
+                                </View>
+                              </View>
+                            </View>
+                          );
+                        })
+                      )}
+                    </ScrollView>
+                    <View style={styles.commentSheetInputRow}>
+                      <TextInput
+                        style={styles.commentSheetInput}
+                        placeholder="Yorum yaz..."
+                        placeholderTextColor={theme.colors.textMuted}
+                        value={commentText[post.id] ?? ''}
+                        onChangeText={(t) => setCommentText((prev) => ({ ...prev, [post.id]: t }))}
+                        multiline
+                        maxLength={500}
+                        editable={postingComment !== post.id}
+                      />
+                      <TouchableOpacity
+                        style={[styles.commentSendBtn, (!(commentText[post.id] ?? '').trim() || postingComment === post.id) && styles.commentSendBtnDisabled]}
+                        onPress={() => submitComment(post.id, post.staff_id ?? null, post.guest_id ?? null)}
+                        disabled={!(commentText[post.id] ?? '').trim() || postingComment === post.id}
+                        activeOpacity={0.8}
+                      >
+                        {postingComment === post.id ? (
+                          <ActivityIndicator size="small" color="#fff" />
+                        ) : (
+                          <Ionicons name="send" size={20} color="#fff" />
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                );
+              })()}
+            </Pressable>
+          </KeyboardAvoidingView>
+        </Pressable>
+      </Modal>
 
       {/* Bildir modal: sebep + açıklama */}
       <Modal
@@ -647,7 +1262,7 @@ export default function CustomerHome() {
                       ref={fullscreenVideoRef}
                       source={{ uri: fullscreenPostMedia.uri }}
                       usePoster={false}
-                      style={[styles.fullscreenImage, styles.fullscreenVideo, { width: SCREEN_WIDTH, height: SCREEN_HEIGHT }]}
+                      style={[styles.fullscreenImage, styles.fullscreenVideo, { width: SCREEN_WIDTH - 48, height: SCREEN_HEIGHT - 96 }]}
                       useNativeControls={false}
                       resizeMode="contain"
                       isLooping={false}
@@ -662,7 +1277,7 @@ export default function CustomerHome() {
                     {fullscreenPostMedia.posterUri && !fullscreenVideoReady ? (
                       <CachedImage
                         uri={fullscreenPostMedia.posterUri}
-                        style={[StyleSheet.absoluteFillObject, styles.fullscreenPosterImage, { width: SCREEN_WIDTH, height: SCREEN_HEIGHT }]}
+                        style={[StyleSheet.absoluteFillObject, styles.fullscreenPosterImage, { width: SCREEN_WIDTH - 48, height: SCREEN_HEIGHT - 96 }]}
                         contentFit="contain"
                         pointerEvents="none"
                       />
@@ -671,7 +1286,7 @@ export default function CustomerHome() {
                 ) : (
                   <CachedImage
                     uri={fullscreenPostMedia.uri}
-                    style={[styles.fullscreenImage, { width: SCREEN_WIDTH, height: SCREEN_HEIGHT }]}
+                    style={[styles.fullscreenImage, { width: SCREEN_WIDTH - 48, height: SCREEN_HEIGHT - 96 }]}
                     contentFit="contain"
                   />
                 )}
@@ -737,10 +1352,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'flex-start',
   },
-  storyItem: {
-    alignItems: 'center',
-    width: 80,
-  },
+  storyItem: { alignItems: 'center', width: 80 },
   storyRing: {
     width: 72,
     height: 72,
@@ -751,11 +1363,7 @@ const styles = StyleSheet.create({
     marginBottom: 6,
     overflow: 'hidden',
   },
-  storyAvatar: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-  },
+  storyAvatar: { width: 72, height: 72, borderRadius: 36 },
   storyAvatarPlaceholder: {
     width: 72,
     height: 72,
@@ -765,6 +1373,37 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   storyAvatarLetter: { fontSize: 28, fontWeight: '700', color: theme.colors.primary },
+  staffCardsRow: {
+    flexDirection: 'row',
+    paddingVertical: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.lg,
+    gap: 24,
+    paddingRight: theme.spacing.xl,
+  },
+  staffCard: { width: 80, alignItems: 'center' },
+  staffCardInner: { alignItems: 'center' },
+  staffCardRing: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    borderWidth: 2.5,
+    borderColor: theme.colors.success,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  staffCardAvatar: { width: 68, height: 68, borderRadius: 34, backgroundColor: theme.colors.borderLight },
+  staffCardPlaceholder: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: theme.colors.primaryLight + '50',
+  },
+  staffCardLetter: { fontSize: 26, fontWeight: '700', color: theme.colors.primary },
+  staffCardTextBlock: { minHeight: 36, alignItems: 'center', justifyContent: 'flex-start' },
+  staffCardName: { fontWeight: '600', fontSize: 13, color: theme.colors.text, textAlign: 'center' },
+  staffCardDept: { fontSize: 11, color: theme.colors.textMuted, marginTop: 4, textAlign: 'center' },
   statusDot: {
     position: 'absolute',
     bottom: 2,
@@ -920,19 +1559,64 @@ const styles = StyleSheet.create({
   messageBody: { flex: 1 },
   messageLabel: { fontSize: 15, fontWeight: '600', color: theme.colors.text },
   messageDept: { fontSize: 13, color: theme.colors.textMuted, marginTop: 2 },
+  collapseSection: { marginBottom: 4 },
+  collapseHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+  },
+  collapseLabel: { fontSize: 13, fontWeight: '600', color: theme.colors.textSecondary },
+  feedTagFilters: { marginBottom: 12 },
+  feedTagFiltersContent: { gap: 8, paddingRight: 20 },
+  feedTagBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: theme.colors.borderLight,
+  },
+  feedTagBtnActive: { backgroundColor: theme.colors.primary + '18', borderColor: theme.colors.primary },
+  feedTagBtnText: { fontSize: 12, fontWeight: '600', color: theme.colors.textSecondary },
+  feedTagBtnTextActive: { color: theme.colors.primary },
   feedList: { gap: 14 },
   feedItem: {
     flexDirection: 'column',
     backgroundColor: theme.colors.surface,
-    borderRadius: 16,
+    borderRadius: 22,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: theme.colors.borderLight,
+    borderColor: theme.colors.primary + '22',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.14,
+    shadowRadius: 14,
+    elevation: 8,
+  },
+  feedItemAccent: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 4,
+    backgroundColor: theme.colors.primaryLight,
+    zIndex: 2,
+  },
+  feedLocationBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 4,
+  },
+  feedLocationText: {
+    fontSize: 12,
+    color: theme.colors.primary,
+    fontWeight: '600',
+    flex: 1,
   },
   feedItemHeader: {
     flexDirection: 'row',
@@ -958,6 +1642,8 @@ const styles = StyleSheet.create({
     color: theme.colors.primary,
   },
   feedItemHeaderText: { flex: 1, minWidth: 0 },
+  feedHeaderActions: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  feedDeleteHeaderBtn: { padding: 8 },
   feedMenuBtn: { padding: 8 },
   feedAuthorName: { fontSize: 15, fontWeight: '600', color: theme.colors.text },
   menuModalOverlay: {
@@ -1038,10 +1724,10 @@ const styles = StyleSheet.create({
   postImageWrap: { position: 'relative', width: '100%' },
   postImage: {
     width: '100%',
-    height: SCREEN_WIDTH - 32,
+    height: SCREEN_WIDTH + 140,
     backgroundColor: theme.colors.borderLight,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
   },
   videoPlayOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -1052,7 +1738,35 @@ const styles = StyleSheet.create({
   feedItemBody: { padding: 12, paddingTop: 4 },
   feedItemTitle: { fontWeight: '600', fontSize: 15, color: theme.colors.text },
   feedItemTitleTextOnly: { fontSize: 16, lineHeight: 24, marginBottom: 0 },
-  feedItemMeta: { fontSize: 12, color: theme.colors.textMuted, marginTop: 2 },
+  feedItemMetaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 4, marginTop: 2 },
+  feedItemMeta: { fontSize: 12, color: theme.colors.textMuted },
+  feedItemDate: { fontSize: 12, color: theme.colors.textMuted },
+  feedActionsRow: { flexDirection: 'row', alignItems: 'center', gap: 16, marginTop: 10, paddingTop: 8, borderTopWidth: 1, borderTopColor: theme.colors.borderLight },
+  feedActionBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  feedActionCount: { fontSize: 13, color: theme.colors.textSecondary },
+  feedDetailLink: { fontSize: 13, fontWeight: '600', color: theme.colors.primary },
+  commentSheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  commentSheetKeyboard: { maxHeight: '80%' },
+  commentSheetCard: { backgroundColor: theme.colors.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingBottom: 24, maxHeight: '100%' },
+  commentSheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: theme.colors.borderLight },
+  commentSheetTitle: { fontSize: 18, fontWeight: '700', color: theme.colors.text },
+  commentSheetScroll: { maxHeight: 280 },
+  commentSheetScrollContent: { padding: 20, paddingBottom: 16 },
+  commentSheetRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12, gap: 10 },
+  commentSheetAvatar: { width: 36, height: 36, borderRadius: 18 },
+  commentSheetAvatarPlaceholder: { width: 36, height: 36, borderRadius: 18, backgroundColor: theme.colors.borderLight, justifyContent: 'center', alignItems: 'center' },
+  commentSheetAvatarInitial: { fontSize: 16, fontWeight: '700', color: theme.colors.textSecondary },
+  commentSheetRowBody: { flex: 1, minWidth: 0 },
+  commentSheetAuthor: { fontSize: 14, fontWeight: '700', color: theme.colors.text },
+  commentSheetText: { fontSize: 14, color: theme.colors.text, marginTop: 2 },
+  commentSheetMetaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 },
+  commentSheetTime: { fontSize: 11, color: theme.colors.textMuted, marginTop: 2 },
+  commentDeleteText: { fontSize: 12, color: theme.colors.error, fontWeight: '700' },
+  commentSheetEmpty: { fontSize: 15, color: theme.colors.textMuted, textAlign: 'center', paddingVertical: 24 },
+  commentSheetInputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 10, paddingHorizontal: 20, paddingTop: 12 },
+  commentSheetInput: { flex: 1, borderWidth: 1, borderColor: theme.colors.borderLight, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, fontSize: 15, color: theme.colors.text, maxHeight: 100 },
+  commentSendBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: theme.colors.primary, justifyContent: 'center', alignItems: 'center' },
+  commentSendBtnDisabled: { opacity: 0.5 },
   emptyFeed: { padding: theme.spacing.xl, alignItems: 'center' },
   emptyFeedText: { color: theme.colors.textMuted },
   showAllBtn: { padding: theme.spacing.md, alignItems: 'center' },
@@ -1063,7 +1777,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  fullscreenImageWrap: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  fullscreenImageWrap: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 48,
+  },
   fullscreenImage: { backgroundColor: '#000' },
   fullscreenCloseBtn: {
     position: 'absolute',

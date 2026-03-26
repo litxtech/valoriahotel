@@ -123,14 +123,7 @@ export default function CustomerLayout() {
       }}
     >
       <Stack.Screen name="(tabs)" />
-      <Stack.Screen
-        name="staff/[id]"
-        options={{
-          headerShown: true,
-          title: 'Çalışan',
-          headerBackTitle: 'Geri',
-        }}
-      />
+      <Stack.Screen name="staff/[id]" options={{ headerShown: false }} />
       <Stack.Screen
         name="hotel/index"
         options={{
@@ -216,6 +209,14 @@ export default function CustomerLayout() {
         options={{
           headerShown: true,
           title: 'Paylaşım',
+          headerBackTitle: 'Geri',
+        }}
+      />
+      <Stack.Screen
+        name="carbon/index"
+        options={{
+          headerShown: true,
+          title: 'Karbon ayak izim',
           headerBackTitle: 'Geri',
         }}
       />

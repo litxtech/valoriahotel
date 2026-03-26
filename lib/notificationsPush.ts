@@ -8,6 +8,7 @@ import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '@/lib/supabase';
 import { log } from '@/lib/logger';
+import { emitPermissionLiveChange } from '@/lib/permissionLive';
 
 const EXPO_PUSH_TOKEN_KEY = 'valoria_expo_push_token';
 
@@ -21,6 +22,7 @@ async function getNotifications() {
 }
 
 /** Uygulama açıkken gelen bildirimi nasıl göstereceğiz (sadece dev/build'de); sesli + öncelikli */
+const VALORIA_CHANNEL_ID = 'valoria_urgent';
 if (!isExpoGo) {
   import('expo-notifications').then(async (Notifications) => {
     Notifications.default.setNotificationHandler({
@@ -34,13 +36,39 @@ if (!isExpoGo) {
     });
     if (Platform.OS === 'android') {
       try {
-        await Notifications.default.setNotificationChannelAsync('default', {
-          name: 'Bildirimler',
+        // valoria_urgent: Yeni kanal - eski valoria kanalı kullanıcı ayarlarında sessize alınmış olabilir (Android kanal ayarları güncellenemez)
+        await Notifications.default.setNotificationChannelAsync(VALORIA_CHANNEL_ID, {
+          name: 'Valoria Bildirimleri',
           importance: Notifications.AndroidImportance.MAX,
-          sound: 'default',
           enableVibrate: true,
           enableLights: true,
           lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+          sound: 'default',
+          vibrationPattern: [0, 250, 250, 250],
+          showBadge: true,
+          description: 'Mesajlar, beğeniler ve duyurular',
+        });
+
+        await Notifications.default.setNotificationChannelAsync('valoria', {
+          name: 'Valoria Bildirimleri',
+          importance: Notifications.AndroidImportance.MAX,
+          enableVibrate: true,
+          enableLights: true,
+          lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+          sound: 'default',
+          vibrationPattern: [0, 250, 250, 250],
+          showBadge: true,
+        });
+
+        await Notifications.default.setNotificationChannelAsync('default', {
+          name: 'Bildirimler',
+          importance: Notifications.AndroidImportance.MAX,
+          enableVibrate: true,
+          enableLights: true,
+          lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+          sound: 'default',
+          vibrationPattern: [0, 250, 250, 250],
+          showBadge: true,
         });
       } catch (e) {
         log.warn('notificationsPush', 'Android kanal ayarı', e);
@@ -49,8 +77,28 @@ if (!isExpoGo) {
   }).catch(() => {});
 }
 
-/** iOS: getExpoPushTokenAsync bazen asla resolve etmez (SDK 53+). Listener ile token'ı yakala. */
+/** iOS: getExpoPushTokenAsync bazen asla resolve etmez (SDK 53+). Listener'ın uygulama başında kayıtlı olması gerekir. */
 const IOS_TOKEN_TIMEOUT_MS = 14000;
+
+/** iOS'ta push token'ın alınabilmesi için listener'ı uygulama başında kaydet. Root _layout'ta bir kez çağrılmalı. */
+export function registerIOSPushTokenListener(): () => void {
+  if (Platform.OS !== 'ios' || isExpoGo) return () => {};
+  let removed = false;
+  import('expo-notifications').then((Notifications) => {
+    if (removed) return;
+    const addListener = (Notifications.default as { addPushTokenListener?: (cb: (token: unknown) => void) => { remove: () => void } }).addPushTokenListener;
+    if (typeof addListener !== 'function') return;
+    addListener((payload: unknown) => {
+      const data = payload && typeof payload === 'object' && 'data' in payload ? (payload as { data: string }).data : payload;
+      const t = typeof data === 'string' ? data : null;
+      if (t && t.startsWith('ExponentPushToken')) {
+        AsyncStorage.setItem(EXPO_PUSH_TOKEN_KEY, t).catch(() => {});
+        log.info('notificationsPush', 'iOS push token listener ile alındı');
+      }
+    });
+  }).catch(() => {});
+  return () => { removed = true; };
+}
 
 /** İzin iste, Expo push token al; yoksa null (web, Expo Go veya izin reddi). */
 /** Android 13+: Kanal token isteğinden önce oluşturulmalı; sesli bildirim için default kanal. */
@@ -62,13 +110,36 @@ export async function getExpoPushTokenAsync(): Promise<string | null> {
     if (!Notifications) return null;
     if (Platform.OS === 'android') {
       try {
-        await Notifications.setNotificationChannelAsync('default', {
-          name: 'Bildirimler',
+        await Notifications.setNotificationChannelAsync(VALORIA_CHANNEL_ID, {
+          name: 'Valoria Bildirimleri',
           importance: Notifications.AndroidImportance.MAX,
-          sound: 'default',
           enableVibrate: true,
           enableLights: true,
           lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+          sound: 'default',
+          vibrationPattern: [0, 250, 250, 250],
+          showBadge: true,
+          description: 'Mesajlar, beğeniler ve duyurular',
+        });
+        await Notifications.setNotificationChannelAsync('valoria', {
+          name: 'Valoria Bildirimleri',
+          importance: Notifications.AndroidImportance.MAX,
+          enableVibrate: true,
+          enableLights: true,
+          lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+          sound: 'default',
+          vibrationPattern: [0, 250, 250, 250],
+          showBadge: true,
+        });
+        await Notifications.setNotificationChannelAsync('default', {
+          name: 'Bildirimler',
+          importance: Notifications.AndroidImportance.MAX,
+          enableVibrate: true,
+          enableLights: true,
+          lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+          sound: 'default',
+          vibrationPattern: [0, 250, 250, 250],
+          showBadge: true,
         });
       } catch (e) {
         log.warn('notificationsPush', 'Android kanal (token öncesi)', e);
@@ -77,13 +148,11 @@ export async function getExpoPushTokenAsync(): Promise<string | null> {
     const { status: existing } = await Notifications.getPermissionsAsync();
     let final = existing;
     if (existing !== 'granted') {
-      const permissionOptions =
-        Platform.OS === 'ios'
-          ? { allowAlert: true, allowBadge: true, allowSound: true, allowAnnouncements: false }
-          : undefined;
-      const { status } = await Notifications.requestPermissionsAsync(permissionOptions as any);
+      const { status } = await Notifications.requestPermissionsAsync();
       final = status;
+      emitPermissionLiveChange();
     }
+    if (existing === 'granted') emitPermissionLiveChange();
     if (final !== 'granted') {
       log.warn('notificationsPush', 'Push izni verilmedi');
       return null;

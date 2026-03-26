@@ -16,6 +16,8 @@ import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/authStore';
 import { uriToArrayBuffer } from '@/lib/uploadMedia';
+import { ensureCameraPermission } from '@/lib/cameraPermission';
+import { ensureMediaLibraryPermission } from '@/lib/mediaLibraryPermission';
 import { CachedImage } from '@/components/CachedImage';
 import { ImagePreviewModal } from '@/components/ImagePreviewModal';
 
@@ -65,11 +67,12 @@ export default function StockMovementScreen() {
   };
 
   const takePhoto = async (kind: 'staff' | 'product') => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('İzin', 'Fotoğraf çekmek için kamera erişimi gerekli.');
-      return;
-    }
+    const granted = await ensureCameraPermission({
+      title: 'Kamera izni',
+      message: 'Stok hareketine fotoğraf eklemek için kamera erişimi gerekiyor.',
+      settingsMessage: 'Kamera izni kapalı. Stok fotoğrafı için ayarlardan izin verin.',
+    });
+    if (!granted) return;
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
@@ -89,9 +92,12 @@ export default function StockMovementScreen() {
   };
 
   const pickPhoto = async (kind: 'staff' | 'product') => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('İzin', 'Galeri erişimi gerekli.');
+    const granted = await ensureMediaLibraryPermission({
+      title: 'Galeri izni',
+      message: 'Stok hareketine fotograf eklemek icin galeri erisimi istiyoruz.',
+      settingsMessage: 'Galeri izni kapali. Stok fotografi icin ayarlardan izin verin.',
+    });
+    if (!granted) {
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({

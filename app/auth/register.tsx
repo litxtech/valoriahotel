@@ -78,7 +78,7 @@ export default function AuthRegisterScreen() {
     setGoogleLoading(true);
     try {
       GoogleSignin.configure({
-        webClientId: '47373050426-peh0fdfi2f10thui8oh1kkgt6rk5qrvh.apps.googleusercontent.com',
+        webClientId: '47373050426-8men09t0m35sufet2n6nl21r4oq07gfo.apps.googleusercontent.com',
         offlineAccess: true,
       });
       await GoogleSignin.hasPlayServices();

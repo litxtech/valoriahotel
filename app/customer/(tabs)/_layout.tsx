@@ -1,5 +1,5 @@
-import { useCallback } from 'react';
-import { View, TouchableOpacity, Text } from 'react-native';
+import { useCallback, useEffect } from 'react';
+import { View, TouchableOpacity, Text, StyleSheet, AppState } from 'react-native';
 import { Tabs, useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -9,9 +9,39 @@ import { useGuestMessagingStore } from '@/stores/guestMessagingStore';
 import { useGuestNotificationStore } from '@/stores/guestNotificationStore';
 import { useScrollToTopStore } from '@/stores/scrollToTopStore';
 import { guestListConversations } from '@/lib/messagingApi';
+import { savePushTokenForGuest } from '@/lib/notificationsPush';
 import { theme } from '@/constants/theme';
+import { CachedImage } from '@/components/CachedImage';
 
 const TAB_ICON_SIZE = 24;
+const PROFILE_TAB_AVATAR_SIZE = 26;
+
+function CustomerProfileTabIcon({ color, focused }: { color: string; focused: boolean }) {
+  const user = useAuthStore((s) => s.user);
+  const avatarUri = (user?.user_metadata?.avatar_url as string) || null;
+  if (avatarUri) {
+    return (
+      <View style={[tabAvatarStyles.tabAvatarWrap, { borderColor: focused ? theme.colors.primary : theme.colors.borderLight }]}>
+        <CachedImage uri={avatarUri} style={tabAvatarStyles.tabAvatar} contentFit="cover" />
+      </View>
+    );
+  }
+  return <Ionicons name={focused ? 'person' : 'person-outline'} size={TAB_ICON_SIZE} color={color} />;
+}
+
+const tabAvatarStyles = StyleSheet.create({
+  tabAvatarWrap: {
+    width: PROFILE_TAB_AVATAR_SIZE,
+    height: PROFILE_TAB_AVATAR_SIZE,
+    borderRadius: PROFILE_TAB_AVATAR_SIZE / 2,
+    borderWidth: 2,
+    overflow: 'hidden',
+  },
+  tabAvatar: {
+    width: '100%',
+    height: '100%',
+  },
+});
 
 function AdminPanelHeaderButton() {
   const router = useRouter();
@@ -82,8 +112,26 @@ export default function CustomerTabsLayout() {
   const tabBarHeight = 56 + insets.bottom;
   const tabBarPaddingBottom = Math.max(insets.bottom, 8);
   const staff = useAuthStore((s) => s.staff);
-  const { unreadCount, appToken, setUnreadCount } = useGuestMessagingStore();
+  const { unreadCount, appToken, setUnreadCount, loadStoredToken } = useGuestMessagingStore();
   const refreshNotifications = useGuestNotificationStore((s) => s.refresh);
+
+  // Misafir push token: appToken varsa kaydet (iOS beğeni/yorum bildirimi; sadece Bildirimler sekmesine bağlı kalmasın)
+  useEffect(() => {
+    loadStoredToken();
+  }, [loadStoredToken]);
+  useEffect(() => {
+    if (!appToken) return;
+    savePushTokenForGuest(appToken).catch(() => {});
+  }, [appToken]);
+
+  // iOS: token gecikmeli gelirse uygulama ön plana gelince tekrar kaydet
+  useEffect(() => {
+    if (!appToken) return;
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') savePushTokenForGuest(appToken).catch(() => {});
+    });
+    return () => sub.remove();
+  }, [appToken]);
 
   useFocusEffect(
     useCallback(() => {
@@ -111,6 +159,21 @@ export default function CustomerTabsLayout() {
       return () => clearInterval(interval);
     }, [refreshNotifications])
   );
+
+  // Android: uygulama ön plana gelince tab rozetleri hemen güncellensin (ilgili sekmeye girmeden)
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') return;
+      refreshNotifications();
+      if (appToken) {
+        guestListConversations(appToken).then((list) => {
+          const total = list.reduce((s, c) => s + (c.unread_count ?? 0), 0);
+          setUnreadCount(total);
+        });
+      }
+    });
+    return () => sub.remove();
+  }, [appToken, refreshNotifications, setUnreadCount]);
 
   return (
     <Tabs
@@ -243,9 +306,7 @@ export default function CustomerTabsLayout() {
           title: t('profileTab'),
           headerTitle: t('profileTab'),
           tabBarShowLabel: false,
-          tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'person' : 'person-outline'} size={TAB_ICON_SIZE} color={color} />
-          ),
+          tabBarIcon: ({ color, focused }) => <CustomerProfileTabIcon color={color} focused={focused} />,
         }}
       />
       <Tabs.Screen

@@ -12,11 +12,14 @@ interface GuestFlowState {
   guestId: string | null;
   /** Sözleşme doldurulurken seçilen dil (success sayfasında metinler bu dilde gösterilir) */
   contractLang: string | null;
+  /** İmza sonrası success ekranında gösterilecek form satırları (Etiket: değer) */
+  signedFormLines: string[] | null;
   setStep: (s: Step) => void;
   setQR: (token: string, roomId: string, roomNumber: string) => void;
   setLang: (l: LangCode) => void;
   setGuestId: (id: string | null) => void;
   setContractLang: (l: string | null) => void;
+  setSignedFormLines: (lines: string[] | null) => void;
   reset: () => void;
 }
 
@@ -28,6 +31,7 @@ const initialState = {
   lang: 'tr' as LangCode,
   guestId: null as string | null,
   contractLang: null as string | null,
+  signedFormLines: null as string[] | null,
 };
 
 export const useGuestFlowStore = create<GuestFlowState>((set) => ({
@@ -37,5 +41,6 @@ export const useGuestFlowStore = create<GuestFlowState>((set) => ({
   setLang: (lang) => set({ lang }),
   setGuestId: (guestId) => set({ guestId }),
   setContractLang: (contractLang) => set({ contractLang }),
+  setSignedFormLines: (signedFormLines) => set({ signedFormLines }),
   reset: () => set(initialState),
 }));

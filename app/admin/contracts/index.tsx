@@ -34,25 +34,31 @@ export default function ContractsList() {
     })();
   }, []);
 
+  const actions = [
+    { id: 'rules', emoji: '📋', label: 'Kurallar', href: '/admin/contracts/rules', color: '#1a365d' },
+    { id: 'settings', emoji: '🔗', label: 'QR / Mağaza', href: '/admin/contracts/settings', color: '#0f766e' },
+    { id: 'acceptances', emoji: '✅', label: 'Onaylar', href: '/admin/contracts/acceptances', color: '#0369a1' },
+    { id: 'design', emoji: '🎨', label: 'Tasarım', href: '/admin/contracts/design', color: '#7c3aed' },
+    { id: 'formFields', emoji: '📝', label: 'Form alanları', href: '/admin/contracts/form-fields', color: '#0d9488' },
+  ] as const;
+
   if (loading) return <Text style={styles.loading}>Yükleniyor...</Text>;
 
   return (
     <View style={styles.container}>
-      <TouchableOpacity style={styles.rulesCta} onPress={() => router.push('/admin/contracts/rules')}>
-        <Text style={styles.rulesCtaText}>📋 Kurallar sözleşmesi (Türkçe) – Düzenle</Text>
-      </TouchableOpacity>
-      <TouchableOpacity style={[styles.rulesCta, styles.settingsCta]} onPress={() => router.push('/admin/contracts/settings')}>
-        <Text style={styles.rulesCtaText}>🔗 QR URL + Mağaza linkleri (Play Store / App Store)</Text>
-      </TouchableOpacity>
-      <TouchableOpacity style={[styles.rulesCta, styles.acceptancesCta]} onPress={() => router.push('/admin/contracts/acceptances')}>
-        <Text style={styles.rulesCtaText}>✅ Sözleşme onayları – Oda ataması</Text>
-      </TouchableOpacity>
-      <TouchableOpacity style={[styles.rulesCta, styles.designCta]} onPress={() => router.push('/admin/contracts/design')}>
-        <Text style={styles.rulesCtaText}>🎨 Sözleşme tasarımı – Görünüm ayarları</Text>
-      </TouchableOpacity>
-      <TouchableOpacity style={[styles.rulesCta, styles.formFieldsCta]} onPress={() => router.push('/admin/contracts/form-fields')}>
-        <Text style={styles.rulesCtaText}>📋 Hangi bilgiyi almak istiyorsunuz?</Text>
-      </TouchableOpacity>
+      <View style={styles.avatarRow}>
+        {actions.map(({ id, emoji, label, href, color }) => (
+          <TouchableOpacity
+            key={id}
+            style={[styles.avatarBtn, { backgroundColor: color }]}
+            onPress={() => router.push(href)}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.avatarEmoji}>{emoji}</Text>
+            <Text style={styles.avatarLabel} numberOfLines={2}>{label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
       <Text style={styles.sectionTitle}>Dil bazlı sözleşmeler (tıklayarak düzenleyin)</Text>
       <FlatList
         data={templates}
@@ -77,12 +83,26 @@ export default function ContractsList() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f7fafc' },
-  rulesCta: { margin: 16, marginBottom: 8, marginHorizontal: 16, padding: 16, backgroundColor: '#1a365d', borderRadius: 12, alignItems: 'center' },
-  settingsCta: { backgroundColor: '#0f766e' },
-  acceptancesCta: { backgroundColor: '#0369a1' },
-  designCta: { backgroundColor: '#7c3aed' },
-  formFieldsCta: { backgroundColor: '#0d9488' },
-  rulesCtaText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  avatarRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 12,
+  },
+  avatarBtn: {
+    width: 72,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 6,
+    borderRadius: 16,
+    minHeight: 72,
+  },
+  avatarEmoji: { fontSize: 28, marginBottom: 4 },
+  avatarLabel: { color: '#fff', fontSize: 11, fontWeight: '600', textAlign: 'center' },
   loading: { padding: 24 },
   sectionTitle: { fontSize: 14, fontWeight: '600', color: '#64748b', marginHorizontal: 16, marginBottom: 8 },
   list: { padding: 16 },

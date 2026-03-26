@@ -106,7 +106,8 @@ Deno.serve(async (req: Request) => {
       .select("id")
       .eq("auth_id", user.id)
       .eq("role", "admin")
-      .eq("is_active", true)
+      .or("is_active.eq.true,is_active.is.null")
+      .is("deleted_at", null)
       .maybeSingle();
     if (!adminStaff) {
       return new Response(JSON.stringify({ error: "Yetkisiz: Sadece admin hesap silebilir" }), {

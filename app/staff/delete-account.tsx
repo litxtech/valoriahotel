@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@/stores/authStore';
-import { supabase } from '@/lib/supabase';
+import { invokeEdgeWithAuth } from '@/lib/invokeEdgeWithAuth';
 import { theme } from '@/constants/theme';
 
 export default function StaffDeleteAccountScreen() {
@@ -28,19 +28,10 @@ export default function StaffDeleteAccountScreen() {
     if (!user) return;
     setLoading(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token;
-      if (!token) {
-        Alert.alert('Hata', 'Oturum bulunamadı. Lütfen tekrar giriş yapın.');
-        setLoading(false);
-        return;
-      }
-      const { data, error } = await supabase.functions.invoke('delete-user-account', {
-        body: {
-          mode: 'self',
-          password: password || undefined,
-          deletion_reason: reason.trim() || undefined,
-        },
+      const { data, error } = await invokeEdgeWithAuth('delete-user-account', {
+        mode: 'self',
+        password: password || undefined,
+        deletion_reason: reason.trim() || undefined,
       });
       if (error) throw error;
       if ((data as { error?: string })?.error) {

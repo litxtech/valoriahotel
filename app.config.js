@@ -1,12 +1,11 @@
 const { withBuildProperties } = require('expo-build-properties');
-const withKotlinVersion = require('./plugins/withKotlinVersion');
 
 const devClientScheme = 'exp+valoria-hotel';
 
 const baseConfig = {
   name: 'Valoria',
   slug: 'valoria-hotel',
-  version: '2.2.1',
+  version: '2.2.4',
   orientation: 'portrait',
   icon: './assets/icon.png',
   scheme: 'valoria',
@@ -20,19 +19,19 @@ const baseConfig = {
   ios: {
     supportsTablet: false,
     bundleIdentifier: 'com.valoria.hotel',
-    buildNumber: '4',
+    buildNumber: '11',
     newArchEnabled: false,
     infoPlist: {
       NSCameraUsageDescription: 'Sözleşme onayı için QR kod okutmanız gerekiyor.',
       NSPhotoLibraryUsageDescription: 'Profil ve belge yükleme için galeri erişimi.',
       NSLocationWhenInUseUsageDescription: 'Uygulama açıkken oteli haritada göstermek ve size yaklaştığınızda check-in için kolaylık sunmak üzere konum kullanılır.',
       NSMicrophoneUsageDescription: 'Sesli mesaj kaydi icin mikrofon erisimi gerekir.',
-      NSLocalNetworkUsageDescription: 'Development build testinde (telefonunuzdan bilgisayarınızdaki geliştirme sunucusuna bağlanmak için) yerel ağ erişimi gerekir.',
+      NSLocalNetworkUsageDescription: 'Güvenlik kameralarını canlı izlemek ve geliştirme sunucusuna bağlanmak için yerel ağ erişimi gerekir.',
       ITSAppUsesNonExemptEncryption: false,
     },
   },
   android: {
-    versionCode: 8,
+    versionCode: 13,
     softwareKeyboardLayoutMode: 'pan',
     googleServicesFile: './google-services.json',
     adaptiveIcon: {
@@ -44,12 +43,12 @@ const baseConfig = {
       'android.permission.CAMERA',
       'android.permission.ACCESS_FINE_LOCATION',
       'android.permission.RECORD_AUDIO',
+      'android.permission.NFC',
       // Android 13+ (API 33): bildirim izni manifest’te tanımlı olmalı
       'android.permission.POST_NOTIFICATIONS',
     ],
   },
   plugins: [
-    withKotlinVersion,
     [
       'expo-dev-client',
       {
@@ -73,8 +72,9 @@ const baseConfig = {
         image: './assets/splash-icon.png',
         resizeMode: 'contain',
         backgroundColor: '#ffffff',
-        imageWidth: 280,
-        android: { imageWidth: 280 },
+        imageWidth: 240,
+        android: { imageWidth: 240, backgroundColor: '#ffffff' },
+        ios: { backgroundColor: '#ffffff' },
       },
     ],
     [
@@ -84,8 +84,8 @@ const baseConfig = {
         color: '#1a365d',
         androidMode: 'default',
         androidCollapsedTitle: 'Valoria',
-        defaultChannelId: 'valoria',
-        defaultChannel: 'valoria',
+        defaultChannelId: 'valoria_urgent',
+        defaultChannel: 'valoria_urgent',
       },
     ],
     'expo-font',

@@ -9,14 +9,20 @@ import {
   Modal,
   ActivityIndicator,
   Alert,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/authStore';
 import { theme } from '@/constants/theme';
 import { shareContractPdf, type GuestForPdf } from '@/lib/contractPdf';
+import { VAT_RATE, ACCOMMODATION_TAX_RATE } from '@/constants/hmbHotel';
+import { sendNotification } from '@/lib/notificationService';
+import { GUEST_TYPES, GUEST_MESSAGE_TEMPLATES } from '@/lib/notifications';
 
-type RoomRow = { id: string; room_number: string; floor: number | null; status: string };
+type RoomRow = { id: string; room_number: string; floor: number | null; status: string; price_per_night?: number | null };
 
 type AcceptanceRow = {
   id: string;
@@ -45,6 +51,9 @@ export default function StaffAcceptancesScreen() {
   const [rooms, setRooms] = useState<RoomRow[]>([]);
   const [roomModalVisible, setRoomModalVisible] = useState(false);
   const [assignTarget, setAssignTarget] = useState<AcceptanceRow | null>(null);
+  const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
+  const [priceInput, setPriceInput] = useState('');
+  const [nightsInput, setNightsInput] = useState('');
   const [assigning, setAssigning] = useState(false);
   const [pdfLoadingId, setPdfLoadingId] = useState<string | null>(null);
 
@@ -85,7 +94,7 @@ export default function StaffAcceptancesScreen() {
     if (roomModalVisible) {
       supabase
         .from('rooms')
-        .select('id, room_number, floor, status')
+        .select('id, room_number, floor, status, price_per_night')
         .order('room_number')
         .then(({ data }) => setRooms(data ?? []));
     }
@@ -99,25 +108,84 @@ export default function StaffAcceptancesScreen() {
 
   const openRoomModal = (item: AcceptanceRow) => {
     setAssignTarget(item);
+    setSelectedRoomId(null);
+    setPriceInput('');
+    setNightsInput('');
     setRoomModalVisible(true);
   };
 
-  const assignRoom = async (roomId: string) => {
+  const selectRoomForAssign = (roomId: string) => {
+    setSelectedRoomId(roomId);
+    const room = rooms.find((r) => r.id === roomId);
+    if (room?.price_per_night != null) setPriceInput(String(room.price_per_night));
+    else setPriceInput('');
+    setNightsInput('');
+  };
+
+  const confirmAssignRoom = async () => {
     if (!assignTarget) return;
+    const roomId = selectedRoomId;
+    if (!roomId) {
+      Alert.alert('Uyarı', 'Önce bir oda seçin.');
+      return;
+    }
+    const price = priceInput.trim() ? parseFloat(priceInput.replace(',', '.')) : null;
+    const nights = nightsInput.trim() ? parseInt(nightsInput, 10) : null;
+    if (price == null || price < 0 || !nights || nights < 1) {
+      Alert.alert('Hata', 'Geçerli bir fiyat ve en az 1 gün girin. Maliye raporu için zorunludur.');
+      return;
+    }
+    const totalNet = price * nights;
+    const vatAmount = Math.round(totalNet * VAT_RATE * 100) / 100;
+    const accommodationTaxAmount = Math.round(totalNet * ACCOMMODATION_TAX_RATE * 100) / 100;
     setAssigning(true);
     try {
-      const { error } = await supabase
+      const { error: errAcceptance } = await supabase
         .from('contract_acceptances')
         .update({ room_id: roomId })
         .eq('id', assignTarget.id);
-      if (error) throw error;
+      if (errAcceptance) throw errAcceptance;
+
+      if (assignTarget.guest_id) {
+        const { error: errGuest } = await supabase
+          .from('guests')
+          .update({
+            room_id: roomId,
+            status: 'checked_in',
+            check_in_at: new Date().toISOString(),
+            total_amount_net: totalNet,
+            vat_amount: vatAmount,
+            accommodation_tax_amount: accommodationTaxAmount,
+            nights_count: nights,
+          })
+          .eq('id', assignTarget.guest_id);
+        if (errGuest) throw errGuest;
+        await supabase.from('rooms').update({ status: 'occupied' }).eq('id', roomId);
+        const roomNumber = rooms.find((r) => r.id === roomId)?.room_number;
+        const msg = GUEST_MESSAGE_TEMPLATES[GUEST_TYPES.admin_assigned_room]({ roomNumber: roomNumber ?? '' });
+        await sendNotification({
+          guestId: assignTarget.guest_id,
+          title: msg.title,
+          body: msg.body,
+          notificationType: GUEST_TYPES.admin_assigned_room,
+          category: 'guest',
+          createdByStaffId: staffId ?? undefined,
+        });
+      }
       setRoomModalVisible(false);
       setAssignTarget(null);
+      setSelectedRoomId(null);
+      setPriceInput('');
+      setNightsInput('');
       await load();
     } catch (e) {
       Alert.alert('Hata', (e as Error)?.message ?? 'Oda atanamadı.');
     }
     setAssigning(false);
+  };
+
+  const assignRoom = async (roomId: string) => {
+    selectRoomForAssign(roomId);
   };
 
   const clearRoom = async () => {
@@ -129,8 +197,26 @@ export default function StaffAcceptancesScreen() {
         .update({ room_id: null })
         .eq('id', assignTarget.id);
       if (error) throw error;
+      if (assignTarget.guest_id && assignTarget.room_id) {
+        await supabase
+          .from('guests')
+          .update({
+            room_id: null,
+            status: 'pending',
+            check_in_at: null,
+            total_amount_net: null,
+            vat_amount: null,
+            accommodation_tax_amount: null,
+            nights_count: null,
+          })
+          .eq('id', assignTarget.guest_id);
+        await supabase.from('rooms').update({ status: 'available' }).eq('id', assignTarget.room_id);
+      }
       setRoomModalVisible(false);
       setAssignTarget(null);
+      setSelectedRoomId(null);
+      setPriceInput('');
+      setNightsInput('');
       await load();
     } catch (e) {
       Alert.alert('Hata', (e as Error)?.message ?? 'Oda kaldırılamadı.');
@@ -147,7 +233,7 @@ export default function StaffAcceptancesScreen() {
     try {
       const { data: guest, error } = await supabase
         .from('guests')
-        .select('full_name, phone, email, id_number, verified_at, created_at, signature_data, rooms(room_number), contract_templates(title, content)')
+        .select('full_name, phone, email, id_number, verified_at, created_at, signature_data, rooms(room_number), contract_templates(title, content), total_amount_net, nights_count, vat_amount, accommodation_tax_amount')
         .eq('id', item.guest_id)
         .single();
       if (error || !guest) throw new Error(error?.message ?? 'Misafir bulunamadı.');
@@ -252,46 +338,82 @@ export default function StaffAcceptancesScreen() {
           activeOpacity={1}
           onPress={() => !assigning && setRoomModalVisible(false)}
         >
-          <View style={styles.modalContent} onStartShouldSetResponder={() => true}>
-            <Text style={styles.modalTitle}>Oda seçin</Text>
-            {assignTarget && (
-              <Text style={styles.modalSub}>
-                Onay: {assignTarget.token.slice(0, 12)}… · {new Date(assignTarget.accepted_at).toLocaleString('tr-TR')}
-              </Text>
-            )}
-            <TouchableOpacity style={styles.clearRoomBtn} onPress={() => clearRoom()} disabled={assigning}>
-              <Text style={styles.clearRoomText}>Oda atamasını kaldır</Text>
-            </TouchableOpacity>
-            <FlatList
-              data={rooms}
-              keyExtractor={(r) => r.id}
-              style={styles.roomList}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={styles.roomItem}
-                  onPress={() => assignRoom(item.id)}
-                  disabled={assigning}
-                >
-                  <Text style={styles.roomItemNum}>Oda {item.room_number}</Text>
-                  {item.floor != null && (
-                    <Text style={styles.roomItemFloor}>Kat {item.floor}</Text>
-                  )}
-                  <View style={[styles.roomStatusBadge, { backgroundColor: item.status === 'available' ? theme.colors.success : theme.colors.textMuted }]}>
-                    <Text style={styles.roomStatusText}>{STATUS_LABELS[item.status] ?? item.status}</Text>
-                  </View>
-                </TouchableOpacity>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.modalContentWrap}
+          >
+            <View style={styles.modalContent} onStartShouldSetResponder={() => true}>
+              <Text style={styles.modalTitle}>Oda seçin – Fiyat ve gün (Maliye)</Text>
+              {assignTarget && (
+                <Text style={styles.modalSub}>
+                  Onay: {assignTarget.token.slice(0, 12)}… · {new Date(assignTarget.accepted_at).toLocaleString('tr-TR')}
+                </Text>
               )}
-            />
-            {assigning && (
-              <ActivityIndicator style={styles.modalSpinner} size="small" color={theme.colors.primary} />
-            )}
-            <TouchableOpacity
-              style={styles.modalClose}
-              onPress={() => !assigning && setRoomModalVisible(false)}
-            >
-              <Text style={styles.modalCloseText}>Kapat</Text>
-            </TouchableOpacity>
-          </View>
+              <TouchableOpacity style={styles.clearRoomBtn} onPress={() => clearRoom()} disabled={assigning}>
+                <Text style={styles.clearRoomText}>Oda atamasını kaldır</Text>
+              </TouchableOpacity>
+              <FlatList
+                data={rooms}
+                keyExtractor={(r) => r.id}
+                style={styles.roomList}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={[styles.roomItem, selectedRoomId === item.id && styles.roomItemSelected]}
+                    onPress={() => selectRoomForAssign(item.id)}
+                    disabled={assigning}
+                  >
+                    <Text style={styles.roomItemNum}>Oda {item.room_number}</Text>
+                    {item.floor != null && (
+                      <Text style={styles.roomItemFloor}>Kat {item.floor}</Text>
+                    )}
+                    <View style={[styles.roomStatusBadge, { backgroundColor: item.status === 'available' ? theme.colors.success : theme.colors.textMuted }]}>
+                      <Text style={styles.roomStatusText}>{STATUS_LABELS[item.status] ?? item.status}</Text>
+                    </View>
+                  </TouchableOpacity>
+                )}
+              />
+              {selectedRoomId && (
+                <View style={styles.priceForm}>
+                  <Text style={styles.priceFormLabel}>Gece başı fiyat (₺)</Text>
+                  <TextInput
+                    style={styles.priceInput}
+                    value={priceInput}
+                    onChangeText={setPriceInput}
+                    keyboardType="decimal-pad"
+                    placeholder="Örn. 1500"
+                  />
+                  <Text style={styles.priceFormLabel}>Kaç gün kalacak?</Text>
+                  <TextInput
+                    style={styles.priceInput}
+                    value={nightsInput}
+                    onChangeText={setNightsInput}
+                    keyboardType="number-pad"
+                    placeholder="Örn. 3"
+                  />
+                  <TouchableOpacity
+                    style={[styles.confirmAssignBtn, assigning && styles.confirmAssignBtnDisabled]}
+                    onPress={confirmAssignRoom}
+                    disabled={assigning}
+                  >
+                    {assigning ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Text style={styles.confirmAssignBtnText}>Odaya yerleştir</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              )}
+              {assigning && !selectedRoomId && (
+                <ActivityIndicator style={styles.modalSpinner} size="small" color={theme.colors.primary} />
+              )}
+              <TouchableOpacity
+                style={styles.modalClose}
+                onPress={() => !assigning && setRoomModalVisible(false)}
+              >
+                <Text style={styles.modalCloseText}>Kapat</Text>
+              </TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
         </TouchableOpacity>
       </Modal>
     </View>
@@ -376,12 +498,20 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: 24,
   },
+  modalContentWrap: { maxWidth: 400, width: '100%', alignSelf: 'center', maxHeight: '85%' },
   modalContent: {
     backgroundColor: theme.colors.surface,
     borderRadius: 16,
-    maxHeight: '80%',
+    maxHeight: '85%',
     padding: 16,
   },
+  roomItemSelected: { backgroundColor: theme.colors.primary + '20', borderWidth: 2, borderColor: theme.colors.primary, borderRadius: 8 },
+  priceForm: { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: theme.colors.border },
+  priceFormLabel: { fontSize: 13, fontWeight: '600', color: theme.colors.textSecondary, marginBottom: 6 },
+  priceInput: { borderWidth: 1, borderColor: theme.colors.border, borderRadius: 10, padding: 12, fontSize: 16, marginBottom: 12 },
+  confirmAssignBtn: { padding: 14, backgroundColor: theme.colors.primary, borderRadius: 12, alignItems: 'center', marginTop: 8 },
+  confirmAssignBtnDisabled: { opacity: 0.7 },
+  confirmAssignBtnText: { color: '#fff', fontWeight: '600', fontSize: 16 },
   modalTitle: { fontSize: 18, fontWeight: '700', color: theme.colors.text, marginBottom: 4 },
   modalSub: { fontSize: 12, color: theme.colors.textMuted, marginBottom: 12 },
   clearRoomBtn: { alignSelf: 'flex-start', paddingVertical: 6, paddingHorizontal: 10, marginBottom: 12 },
