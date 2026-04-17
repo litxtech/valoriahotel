@@ -37,6 +37,7 @@ type StaffRow = {
   banned_until?: string | null;
   deleted_at?: string | null;
   last_login_device_id?: string | null;
+  organization?: { name: string } | null;
 };
 
 type GuestRow = {
@@ -107,7 +108,9 @@ export default function StaffListScreen() {
     ] = await Promise.all([
       supabase
         .from('staff')
-        .select('id, auth_id, full_name, email, role, department, is_active, is_online, position, created_at, verification_badge, banned_until, deleted_at, last_login_device_id')
+        .select(
+          'id, auth_id, full_name, email, role, department, is_active, is_online, position, created_at, verification_badge, banned_until, deleted_at, last_login_device_id, organization:organization_id(name)'
+        )
         .order('full_name', { ascending: true }),
       supabase.rpc('admin_list_guests', { p_filter: 'all' }),
       supabase.from('staff').select('last_login_device_id').not('deleted_at', 'is', null),
@@ -118,7 +121,7 @@ export default function StaffListScreen() {
     if (staffRes.error) {
       setStaffList([]);
     } else {
-      setStaffList((staffRes.data ?? []) as StaffRow[]);
+      setStaffList((staffRes.data ?? []) as unknown as StaffRow[]);
     }
 
     if (guestsRes.error) {
@@ -351,6 +354,11 @@ export default function StaffListScreen() {
                     <Text style={styles.email} numberOfLines={1}>
                       {row.email || '—'}
                     </Text>
+                    {row.organization?.name ? (
+                      <Text style={styles.orgTag} numberOfLines={1}>
+                        {row.organization.name}
+                      </Text>
+                    ) : null}
                     <View style={styles.meta}>
                       <Text style={styles.role}>{ROLE_LABELS[row.role ?? ''] ?? row.role ?? '—'}</Text>
                       {row.department ? (
@@ -662,6 +670,7 @@ const styles = StyleSheet.create({
   rowBody: { flex: 1, minWidth: 0 },
   name: { fontSize: 16, fontWeight: '700', color: adminTheme.colors.text },
   email: { fontSize: 13, color: adminTheme.colors.textSecondary, marginTop: 2 },
+  orgTag: { fontSize: 12, color: adminTheme.colors.accent, marginTop: 4, fontWeight: '600' },
   meta: { flexDirection: 'row', marginTop: 4, flexWrap: 'wrap' },
   role: { fontSize: 13, fontWeight: '600', color: adminTheme.colors.textSecondary },
   dept: { fontSize: 13, color: adminTheme.colors.textMuted },

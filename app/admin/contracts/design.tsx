@@ -87,7 +87,8 @@ export default function ContractDesignScreen() {
       showsVerticalScrollIndicator={false}
     >
       <Text style={styles.intro}>
-        QR ile açılan sözleşme sayfasının görünümünü aşağıdan seçin. Değişiklikler kaydettikten sonra yeni açılan sayfalarda uygulanır.
+        QR ile açılan sözleşme sayfasının görünümünü aşağıdan seçin. Değişiklikler kaydettikten sonra yeni açılan sayfalarda uygulanır. PDF önizleme,
+        yazdırma ve paylaşım da aynı yazı boyutu ve kompakt ayarını kullanır; kompakt açık ve küçük yazı daha az sayfa kullanır.
       </Text>
 
       <Text style={styles.sectionTitle}>Yazı boyutu</Text>

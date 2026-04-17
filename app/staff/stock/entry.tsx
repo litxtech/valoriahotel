@@ -7,6 +7,7 @@ import {
   ScrollView,
   StyleSheet,
   Alert,
+  Platform,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
@@ -100,9 +101,12 @@ export default function StaffStockEntryScreen() {
       settingsMessage: 'Kamera izni kapalı. Stok fotoğrafı için ayarlardan izin verin.',
     });
     if (!granted) return;
+    if (Platform.OS === 'android') {
+      await new Promise((r) => setTimeout(r, 320));
+    }
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
+      allowsEditing: Platform.OS === 'ios',
       quality: 0.6,
       base64: true,
     });
@@ -134,7 +138,7 @@ export default function StaffStockEntryScreen() {
     }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
+      allowsEditing: Platform.OS === 'ios',
       quality: 0.6,
       base64: true,
     });
@@ -160,6 +164,10 @@ export default function StaffStockEntryScreen() {
       Alert.alert('Eksik', 'Oturum gerekli.');
       return;
     }
+    if (!staff.organization_id) {
+      Alert.alert('Hata', 'İşletme bilgisi eksik. Yöneticinize başvurun.');
+      return;
+    }
     const q = parseInt(quantity, 10);
     if (isNaN(q) || q <= 0) {
       Alert.alert('Hata', 'Geçerli miktar girin.');
@@ -179,6 +187,7 @@ export default function StaffStockEntryScreen() {
           barcode: barcodeParam,
           unit: 'adet',
           current_stock: 0,
+          organization_id: staff.organization_id,
         })
         .select('id')
         .single();
@@ -211,11 +220,12 @@ export default function StaffStockEntryScreen() {
       Alert.alert('Hata', error.message);
       return;
     }
-    const { notifyAdmins } = await import('@/lib/notificationService');
-    notifyAdmins({
+    const { sendBulkToStaff } = await import('@/lib/notificationService');
+    sendBulkToStaff({
+      target: 'all_staff',
       title: '📦 Stok onay bekliyor',
-      body: 'Yeni stok hareketi onayınızı bekliyor.',
-      data: { url: '/admin/stock/approvals' },
+      body: 'Yeni stok girişi kaydedildi; onay bekleniyor.',
+      createdByStaffId: staff.id,
     }).catch(() => {});
     Alert.alert('Kaydedildi', 'Stok girişiniz admin onayından sonra işlenecek.', [
       { text: 'Tamam', onPress: () => router.replace('/staff/stock/entry') },

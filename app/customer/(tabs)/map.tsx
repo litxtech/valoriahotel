@@ -21,7 +21,7 @@ import {
   Linking,
   AppState,
 } from 'react-native';
-import { usePathname, useRouter } from 'expo-router';
+import { usePathname, useRouter, useFocusEffect } from 'expo-router';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import CustomerMapPicker from '@/components/CustomerMapPicker';
@@ -38,6 +38,7 @@ import { getRoute, formatDuration, formatDistance, estimateWalkingDuration } fro
 import type { OSRMRoute } from '@/lib/map/osrm';
 import { fetchNearbyMapUsers, upsertMyLocation } from '@/lib/map/userLocations';
 import { getOrCreateGuestForCaller } from '@/lib/getOrCreateGuestForCaller';
+import { guestDisplayName } from '@/lib/guestDisplayName';
 import { theme } from '@/constants/theme';
 import { useAuthStore } from '@/stores/authStore';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -92,12 +93,19 @@ export default function CustomerMapScreen() {
     const posts = rows.map((r) => {
       const staffInfo = Array.isArray(r.staff) ? r.staff[0] : r.staff;
       const guestInfo = Array.isArray(r.guest) ? r.guest[0] : r.guest;
-      const authorName = (staffInfo?.full_name ?? guestInfo?.full_name ?? 'Misafir').trim() || 'Misafir';
+      const authorName = r.staff_id
+        ? (staffInfo?.full_name?.trim() || 'Personel')
+        : guestDisplayName(guestInfo?.full_name, 'Misafir');
       const authorAvatarUrl = staffInfo?.profile_image ?? guestInfo?.photo_url ?? null;
       const postPreviewUrl = r.thumbnail_url ?? (r.media_type === 'image' ? r.media_url : null) ?? null;
       return { id: r.id, lat: r.lat, lng: r.lng, authorName, authorAvatarUrl, postPreviewUrl, staffId: r.staff_id ?? null, guestId: r.guest_id ?? null };
     });
     setMapPosts(posts);
+  }, []);
+
+  const clearMapPostPin = useCallback((id: string) => {
+    setMapPosts((prev) => prev.filter((p) => p.id !== id));
+    setSelectedPostId((cur) => (cur === id ? null : cur));
   }, []);
 
   const loadPois = useCallback(async () => {
@@ -169,9 +177,41 @@ export default function CustomerMapScreen() {
     return () => clearTimeout(t);
   }, [loadNearbyMapUsers, user, staff, poiCenter.lat, poiCenter.lng]);
 
+  useFocusEffect(
+    useCallback(() => {
+      void loadFeedPostsWithLocation();
+    }, [loadFeedPostsWithLocation])
+  );
+
   useEffect(() => {
-    loadFeedPostsWithLocation();
-  }, [loadFeedPostsWithLocation]);
+    const channel = supabase
+      .channel('map_feed_posts_pins')
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'feed_posts' },
+        (payload) => {
+          const id = (payload.old as { id?: string })?.id;
+          if (id) setMapPosts((prev) => prev.filter((p) => p.id !== id));
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'feed_posts' },
+        (payload) => {
+          const row = payload.new as { id?: string; lat?: number | null; lng?: number | null; visibility?: string | null };
+          if (!row?.id) return;
+          const lostPin =
+            row.lat == null ||
+            row.lng == null ||
+            (row.visibility != null && row.visibility !== 'customers');
+          if (lostPin) setMapPosts((prev) => prev.filter((p) => p.id !== row.id));
+        }
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   useEffect(() => {
     if (!userLocation || (!user && !staff)) return;
@@ -452,6 +492,7 @@ export default function CustomerMapScreen() {
           setSelectedPostId(null);
           loadFeedPostsWithLocation();
         }}
+        onPostUnavailable={clearMapPostPin}
       />
 
       <Modal visible={locationCardVisible} transparent animationType="fade" onRequestClose={() => {}}>
@@ -572,6 +613,7 @@ export default function CustomerMapScreen() {
             >
               {mapPosts.map((p) => {
                 const profileHref = p.staffId ? `/customer/staff/${p.staffId}` : p.guestId ? `/customer/guest/${p.guestId}` : null;
+                const isGuestPost = !!p.guestId && !p.staffId;
                 return (
                 <TouchableOpacity
                   key={p.id}
@@ -581,14 +623,14 @@ export default function CustomerMapScreen() {
                   activeOpacity={0.8}
                   delayLongPress={400}
                 >
-                  <View style={styles.postAvatarRing}>
+                  <View style={[styles.postAvatarRing, isGuestPost && styles.postAvatarRingGuest]}>
                     {p.postPreviewUrl ? (
                       <CachedImage uri={p.postPreviewUrl} style={styles.postAvatarImg} contentFit="cover" />
                     ) : p.authorAvatarUrl ? (
                       <CachedImage uri={p.authorAvatarUrl} style={styles.postAvatarImg} contentFit="cover" />
                     ) : (
-                      <View style={[styles.postAvatarImg, styles.postAvatarPlaceholder]}>
-                        <Text style={styles.postAvatarInitial}>{p.authorName.charAt(0).toUpperCase()}</Text>
+                      <View style={[styles.postAvatarImg, isGuestPost ? styles.postAvatarPlaceholderGuest : styles.postAvatarPlaceholder]}>
+                        <Text style={isGuestPost ? styles.postAvatarInitialGuest : styles.postAvatarInitial}>{p.authorName.charAt(0).toUpperCase()}</Text>
                       </View>
                     )}
                   </View>
@@ -713,6 +755,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.4)',
     ...theme.shadows.sm,
   },
+  postAvatarRingGuest: {
+    borderColor: theme.colors.guestAvatarBg,
+  },
   postAvatarImg: {
     width: '100%',
     height: '100%',
@@ -721,10 +766,20 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  postAvatarPlaceholderGuest: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: theme.colors.guestAvatarBg,
+  },
   postAvatarInitial: {
     fontSize: 22,
     fontWeight: '700',
     color: 'rgba(255,255,255,0.9)',
+  },
+  postAvatarInitialGuest: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: theme.colors.guestAvatarLetter,
   },
   postAvatarName: {
     marginTop: 6,
@@ -776,7 +831,7 @@ const styles = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
-    height: 44,
+    height:40,
     borderRadius: 12,
     backgroundColor: 'rgba(0,0,0,0.35)',
     borderWidth: 1,
@@ -872,7 +927,7 @@ const styles = StyleSheet.create({
   shareFab: {
     position: 'absolute',
     right: theme.spacing.lg,
-    width: 56,
+    width: 55,
     height: 56,
     borderRadius: 28,
     backgroundColor: theme.colors.primary,
@@ -997,7 +1052,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   permCardSecondaryText: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '700',
     color: theme.colors.textSecondary,
   },

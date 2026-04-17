@@ -26,6 +26,10 @@ verify_jwt = false
 [functions.send-expo-push]
 verify_jwt = false
 
+# Yeni feed: müşterilere toplu bildirim (Bearer JWT ile gönderi sahibi doğrulanır)
+[functions.notify-guests-new-feed-post]
+verify_jwt = false
+
 # Admin bildirimi: RN'de JWT gateway 401 verebiliyor
 [functions.notify-admins]
 verify_jwt = false

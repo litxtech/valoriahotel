@@ -150,11 +150,14 @@ export default function StaffLayout() {
       <Stack.Screen name="expenses" options={{ headerShown: false }} />
       <Stack.Screen name="profile/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="profile/edit" options={{ title: 'Profil bilgilerini düzenle', headerBackTitle: 'Geri' }} />
-      <Stack.Screen name="tasks" options={{ title: 'Görevlerim', headerBackTitle: 'Geri' }} />
+      <Stack.Screen name="profile/blocked-users" options={{ headerBackTitle: 'Geri' }} />
+      <Stack.Screen name="profile/notifications" options={{ headerBackTitle: 'Geri' }} />
+      <Stack.Screen name="evaluation" options={{ headerBackTitle: 'Geri' }} />
       <Stack.Screen name="delete-account" options={{ title: 'Hesabımı sil', headerBackTitle: 'Geri' }} />
       <Stack.Screen name="map" options={{ headerShown: false }} />
       <Stack.Screen name="cameras" options={{ headerShown: false }} />
       <Stack.Screen name="guests/[id]" options={{ title: 'Misafir profili', headerShown: false }} />
+      <Stack.Screen name="kbs" options={{ headerShown: false }} />
     </Stack>
   );
 }

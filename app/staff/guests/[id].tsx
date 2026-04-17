@@ -20,6 +20,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { theme } from '@/constants/theme';
 import { CachedImage } from '@/components/CachedImage';
 import { ImagePreviewModal } from '@/components/ImagePreviewModal';
+import { guestDisplayName } from '@/lib/guestDisplayName';
 import { staffGetOrCreateDirectConversation } from '@/lib/messagingApi';
 
 const AVATAR_SIZE = 100;
@@ -110,7 +111,7 @@ export default function StaffGuestProfileScreen() {
     );
   }
 
-  const displayName = (guest.full_name ?? 'Misafir').trim() || 'Misafir';
+  const displayName = guestDisplayName(guest.full_name, 'Misafir');
 
   return (
     <ScrollView
@@ -158,7 +159,6 @@ export default function StaffGuestProfileScreen() {
 
       {posts.length > 0 ? (
         <View style={styles.postsSection}>
-          <Text style={styles.sectionTitle}>Paylaşımlar</Text>
           {posts.map((p) => (
             <View key={p.id} style={styles.postCard}>
               {p.thumbnail_url || (p.media_type === 'image' && p.media_url) ? (
@@ -224,11 +224,11 @@ const styles = StyleSheet.create({
     height: '100%',
   },
   avatarPlaceholder: {
-    backgroundColor: theme.colors.primaryLight + '50',
+    backgroundColor: theme.colors.guestAvatarBg,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  avatarLetter: { fontSize: 40, fontWeight: '700', color: theme.colors.primary },
+  avatarLetter: { fontSize: 40, fontWeight: '700', color: theme.colors.guestAvatarLetter },
   name: { fontSize: 22, fontWeight: '700', color: theme.colors.text, marginBottom: 8 },
   badge: {
     paddingHorizontal: 12,
@@ -249,7 +249,6 @@ const styles = StyleSheet.create({
   },
   messageBtnText: { fontSize: 15, fontWeight: '600', color: '#fff' },
   postsSection: { marginTop: 8 },
-  sectionTitle: { fontSize: 17, fontWeight: '700', color: theme.colors.text, marginBottom: 12 },
   postCard: {
     flexDirection: 'row',
     backgroundColor: theme.colors.surface,

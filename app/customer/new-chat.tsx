@@ -16,6 +16,7 @@ import { getOrCreateGuestForCaller } from '@/lib/getOrCreateGuestForCaller';
 import { MESSAGING_COLORS } from '@/lib/messaging';
 import { StaffNameWithBadge, AvatarWithBadge } from '@/components/VerifiedBadge';
 import { CachedImage } from '@/components/CachedImage';
+import { sortStaffAdminFirst } from '@/lib/sortStaffAdminFirst';
 
 type StaffRow = {
   id: string;
@@ -23,7 +24,7 @@ type StaffRow = {
   department: string | null;
   profile_image: string | null;
   is_online: boolean | null;
-  role: string;
+  role?: string | null;
   verification_badge?: 'blue' | 'yellow' | null;
 };
 
@@ -68,14 +69,17 @@ export default function NewChatScreen() {
         .eq('is_active', true)
         .is('deleted_at', null)
         .order('full_name');
-      setStaff((directData ?? []) as StaffRow[]);
+      const direct = (directData ?? []) as StaffRow[];
+      setStaff(
+        sortStaffAdminFirst(direct, (a, b) => (a.full_name || '').localeCompare(b.full_name || '', 'tr'))
+      );
       setLoading(false);
       return;
     }
     // Giriş yok: RPC ile personel listesi (anon)
     const { data: rpcData } = await supabase.rpc('messaging_list_staff_for_guest');
     const rows: StaffRow[] = Array.isArray(rpcData) ? rpcData : rpcData ? [rpcData] : [];
-    setStaff(rows);
+    setStaff(sortStaffAdminFirst(rows, (a, b) => (a.full_name || '').localeCompare(b.full_name || '', 'tr')));
     setLoading(false);
   };
 

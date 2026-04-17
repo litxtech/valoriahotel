@@ -10,7 +10,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Switch,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
@@ -23,6 +22,13 @@ import { adminTheme } from '@/constants/adminTheme';
 import { AdminCard } from '@/components/admin';
 import { CachedImage } from '@/components/CachedImage';
 import { SharedAppLinks } from '@/components/SharedAppLinks';
+import {
+  emptyStaffSocialLinks,
+  staffSocialLinksFromJson,
+  staffSocialLinksToJson,
+  type StaffSocialKey,
+  type StaffSocialLinksState,
+} from '@/lib/staffSocialLinks';
 
 const ROLE_LABELS: Record<string, string> = {
   admin: 'Admin',
@@ -55,7 +61,7 @@ type AdminProfile = {
   role: string | null;
   department: string | null;
   position: string | null;
-  show_gold_profile_border: boolean;
+  social_links: Record<string, unknown> | null;
 };
 
 export default function AdminProfileScreen() {
@@ -65,11 +71,17 @@ export default function AdminProfileScreen() {
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [roleOther, setRoleOther] = useState(''); // "Diğer" seçiliyken serbest metin
+  const [social, setSocial] = useState<StaffSocialLinksState>(() => emptyStaffSocialLinks());
   const profileRef = useRef<AdminProfile | null>(null);
+  const socialRef = useRef<StaffSocialLinksState>(emptyStaffSocialLinks());
 
   useEffect(() => {
     profileRef.current = profile;
   }, [profile]);
+
+  useEffect(() => {
+    socialRef.current = social;
+  }, [social]);
 
   useEffect(() => {
     if (!staff?.id || staff.role !== 'admin') {
@@ -79,15 +91,17 @@ export default function AdminProfileScreen() {
     const load = async () => {
       const { data } = await supabase
         .from('staff')
-        .select('id, full_name, email, phone, profile_image, role, department, position, show_gold_profile_border')
+        .select('id, full_name, email, phone, profile_image, role, department, position, social_links')
         .eq('id', staff.id)
         .single();
       if (data) {
         const d = data as AdminProfile;
         setProfile({
           ...d,
-          show_gold_profile_border: d.show_gold_profile_border ?? false,
         });
+        const sl = staffSocialLinksFromJson(d.social_links);
+        setSocial(sl);
+        socialRef.current = sl;
         const pos = (data as AdminProfile).position;
         if (pos && !PROFILE_ROLE_OPTIONS.includes(pos)) setRoleOther(pos);
       }
@@ -131,8 +145,22 @@ export default function AdminProfileScreen() {
     }
   };
 
+  const saveSocialLinks = useCallback(async (next: StaffSocialLinksState) => {
+    if (!profile?.id) return;
+    const json = staffSocialLinksToJson(next);
+    setSaving(true);
+    const { error } = await supabase.from('staff').update({ social_links: json }).eq('id', profile.id);
+    setSaving(false);
+    if (error) {
+      Alert.alert('Kayıt hatası', `Sosyal medya kaydedilemedi: ${error.message}`);
+      return;
+    }
+    setProfile((p) => (p ? { ...p, social_links: json ?? {} } : null));
+  }, [profile?.id]);
+
   const saveField = useCallback(async (field: keyof AdminProfile, value: string | null) => {
     if (!profile?.id) return;
+    if (field === 'social_links') return;
     const trimmed = value?.trim() ?? '';
     const payload = field === 'email' ? { [field]: trimmed || profile.email || '' } : { [field]: trimmed || null };
     setSaving(true);
@@ -172,7 +200,16 @@ export default function AdminProfileScreen() {
       const name = p.full_name?.trim() ?? '';
       const email = p.email?.trim() ?? '';
       const phone = p.phone?.trim() ?? null;
-      supabase.from('staff').update({ full_name: name || null, email: email || p.email || '', phone }).eq('id', p.id);
+      const socialJson = staffSocialLinksToJson(socialRef.current);
+      supabase
+        .from('staff')
+        .update({
+          full_name: name || null,
+          email: email || p.email || '',
+          phone,
+          social_links: socialJson,
+        })
+        .eq('id', p.id);
     };
   }, []);
 
@@ -229,27 +266,6 @@ export default function AdminProfileScreen() {
               {profile.position ? ` · ${profile.position}` : ''}
             </Text>
             <Text style={styles.avatarHint}>Profil fotoğrafı için dokunun</Text>
-          </View>
-
-          <View style={styles.field}>
-            <Text style={styles.label}>Profil kenar efekti</Text>
-            <Text style={styles.fieldHint}>Profiliniz ziyaret edildiğinde sol, sağ ve üst kenarlarda altın rengi çerçeve gösterilir.</Text>
-            <View style={styles.toggleRow}>
-              <Text style={styles.toggleLabel}>Altın kenar göster</Text>
-              <Switch
-                value={profile.show_gold_profile_border ?? false}
-                onValueChange={async (value) => {
-                  if (!profile?.id) return;
-                  setProfile((p) => (p ? { ...p, show_gold_profile_border: value } : null));
-                  setSaving(true);
-                  const { error } = await supabase.from('staff').update({ show_gold_profile_border: value }).eq('id', profile.id);
-                  setSaving(false);
-                  if (error) Alert.alert('Kayıt hatası', `Ayar kaydedilemedi: ${error.message}`);
-                }}
-                trackColor={{ false: adminTheme.colors.border, true: adminTheme.colors.primary }}
-                thumbColor="#fff"
-              />
-            </View>
           </View>
 
           <View style={styles.field}>
@@ -324,6 +340,70 @@ export default function AdminProfileScreen() {
               keyboardType="phone-pad"
             />
           </View>
+
+          <View style={styles.field}>
+            <Text style={styles.label}>Sosyal medya</Text>
+            <Text style={styles.fieldHint}>
+              Misafirler personel profilinizde WhatsApp ve e-posta ile aynı hizada simgeler olarak görür. Kullanıcı adı veya tam bağlantı yazabilirsiniz.
+            </Text>
+            <View style={styles.socialRow}>
+              {(
+                [
+                  {
+                    key: 'instagram' as StaffSocialKey,
+                    icon: 'logo-instagram' as const,
+                    label: 'Instagram',
+                    placeholder: '@otel veya URL',
+                    circle: styles.socialCircleInstagram,
+                  },
+                  {
+                    key: 'facebook',
+                    icon: 'logo-facebook',
+                    label: 'Facebook',
+                    placeholder: 'sayfa veya URL',
+                    circle: styles.socialCircleFacebook,
+                  },
+                  {
+                    key: 'linkedin',
+                    icon: 'logo-linkedin',
+                    label: 'LinkedIn',
+                    placeholder: 'profil veya URL',
+                    circle: styles.socialCircleLinkedin,
+                  },
+                  {
+                    key: 'x',
+                    icon: 'logo-twitter',
+                    label: 'X',
+                    placeholder: '@kullanıcı',
+                    circle: styles.socialCircleX,
+                  },
+                ] as const
+              ).map((item) => (
+                <View key={item.key} style={styles.socialCol}>
+                  <View style={[styles.socialCircle, item.circle]}>
+                    <Ionicons name={item.icon} size={22} color="#fff" />
+                  </View>
+                  <TextInput
+                    style={styles.socialInput}
+                    value={social[item.key]}
+                    onChangeText={(t) => {
+                      setSocial((prev) => {
+                        const next = { ...prev, [item.key]: t };
+                        socialRef.current = next;
+                        return next;
+                      });
+                    }}
+                    onBlur={() => saveSocialLinks(socialRef.current)}
+                    placeholder={item.placeholder}
+                    placeholderTextColor={adminTheme.colors.textMuted}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                </View>
+              ))}
+            </View>
+          </View>
+
           {saving && (
             <View style={styles.savingRow}>
               <ActivityIndicator size="small" color={adminTheme.colors.accent} />
@@ -498,6 +578,50 @@ const styles = StyleSheet.create({
   savingText: {
     fontSize: 13,
     color: adminTheme.colors.textMuted,
+  },
+  socialRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 14,
+    marginTop: 4,
+    paddingVertical: 8,
+  },
+  socialCol: {
+    width: 72,
+    alignItems: 'center',
+  },
+  socialCircle: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  socialCircleInstagram: {
+    backgroundColor: '#E4405F',
+  },
+  socialCircleFacebook: {
+    backgroundColor: '#1877F2',
+  },
+  socialCircleLinkedin: {
+    backgroundColor: '#0A66C2',
+  },
+  socialCircleX: {
+    backgroundColor: '#0f1419',
+  },
+  socialInput: {
+    width: '100%',
+    borderWidth: 1,
+    borderColor: adminTheme.colors.border,
+    borderRadius: adminTheme.radius.sm,
+    paddingHorizontal: 6,
+    paddingVertical: 6,
+    fontSize: 11,
+    backgroundColor: adminTheme.colors.surface,
+    color: adminTheme.colors.text,
+    textAlign: 'center',
   },
   footNote: {
     marginTop: 20,

@@ -1,6 +1,7 @@
 import { useCallback, useEffect } from 'react';
 import { View, TouchableOpacity, Text, StyleSheet, AppState } from 'react-native';
 import { Tabs, useRouter, useFocusEffect } from 'expo-router';
+import { BottomTabBar, type BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
@@ -106,6 +107,95 @@ function NewChatHeaderButton() {
   );
 }
 
+const FAB_R = 23;
+const feedFabStyles = StyleSheet.create({
+  tabBarWrap: {
+    position: 'relative',
+    overflow: 'visible',
+  },
+  fabOuter: {
+    position: 'absolute',
+    width: 54,
+    height: 46,
+    borderRadius: FAB_R,
+    transform: [{ translateY: -40 }],
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.22,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+  fabGradient: {
+    flex: 1,
+    borderRadius: FAB_R,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.35)',
+    backgroundColor: theme.colors.primary,
+    overflow: 'hidden',
+  },
+  fabGradientWarm: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    height: '55%',
+    borderTopLeftRadius: FAB_R,
+    borderTopRightRadius: FAB_R,
+    backgroundColor: '#e85d04',
+    opacity: 0.45,
+  },
+  fabGradientAccent: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: FAB_R,
+    backgroundColor: theme.colors.accent,
+    opacity: 0.28,
+  },
+});
+
+function CustomerTabBarWithFeedFab(props: BottomTabBarProps) {
+  const router = useRouter();
+  const { t } = useTranslation();
+  const insets = useSafeAreaInsets();
+  const tabBarPaddingBottom = Math.max(insets.bottom, 8);
+  const focusedRoute = props.state.routes[props.state.index];
+  const tabBarStyle = focusedRoute ? props.descriptors[focusedRoute.key]?.options?.tabBarStyle : undefined;
+  const flat = StyleSheet.flatten(tabBarStyle) as { display?: string; height?: number } | undefined;
+  const routeName = focusedRoute?.name;
+  const barHidden = flat?.display === 'none' || flat?.height === 0 || routeName === 'map';
+  const showFeedFab = routeName === 'index';
+
+  if (barHidden || !showFeedFab) {
+    return <BottomTabBar {...props} />;
+  }
+
+  return (
+    <View style={feedFabStyles.tabBarWrap} pointerEvents="box-none">
+      <BottomTabBar {...props} />
+      <TouchableOpacity
+        style={[
+          feedFabStyles.fabOuter,
+          {
+            bottom: tabBarPaddingBottom + 20,
+            right: Math.max(insets.right, 6),
+          },
+        ]}
+        onPress={() => router.push('/customer/feed/new')}
+        activeOpacity={0.88}
+        accessibilityRole="button"
+        accessibilityLabel={`${t('newBtn')} ${t('share')}`}
+      >
+        <View style={feedFabStyles.fabGradient}>
+          <View style={feedFabStyles.fabGradientWarm} pointerEvents="none" />
+          <View style={feedFabStyles.fabGradientAccent} pointerEvents="none" />
+          <Ionicons name="add" size={30} color="#fff" style={{ zIndex: 1 }} />
+        </View>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 export default function CustomerTabsLayout() {
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
@@ -177,6 +267,7 @@ export default function CustomerTabsLayout() {
 
   return (
     <Tabs
+      tabBar={(props) => <CustomerTabBarWithFeedFab {...props} />}
       screenOptions={{
         tabBarHideOnKeyboard: true,
         tabBarActiveTintColor: theme.colors.primary,
@@ -255,6 +346,7 @@ export default function CustomerTabsLayout() {
       <Tabs.Screen
         name="rooms"
         options={{
+          href: null,
           title: t('rooms'),
           tabBarLabel: t('rooms'),
           tabBarIcon: ({ color, focused }) => (

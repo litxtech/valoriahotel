@@ -177,7 +177,11 @@ export default function CustomerNotificationsScreen() {
       const isInternalPath = url && typeof url === 'string' && url.startsWith('/');
       if (isInternalPath) {
         if (postId) {
-          router.push({ pathname: url, params: { openPostId: postId } });
+          if (url.includes('/customer/feed/[id]')) {
+            router.push({ pathname: '/customer/feed/[id]', params: { id: postId } });
+          } else {
+            router.push({ pathname: url, params: { openPostId: postId } });
+          }
         } else {
           router.push(url);
         }

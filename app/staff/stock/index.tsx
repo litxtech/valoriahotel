@@ -69,7 +69,7 @@ export default function StaffStockListScreen() {
       .from('stock_products')
       .select('id, name, unit, current_stock, min_stock, image_url, created_at, created_by, category:stock_categories(name), creator:created_by(full_name)')
       .order('name');
-    setProducts((data ?? []) as Product[]);
+    setProducts((data ?? []) as unknown as Product[]);
   };
 
   /** Stok sayfası ürün kartlarındaki önizleme için: her ürünün en son hareketindeki photo_proof */
@@ -95,7 +95,7 @@ export default function StaffStockListScreen() {
       .select('id, movement_type, quantity, created_at, status, photo_proof, product:stock_products(name), staff:staff_id(full_name)')
       .order('created_at', { ascending: false })
       .limit(15);
-    setRecent((data ?? []) as MovementRow[]);
+    setRecent((data ?? []) as unknown as MovementRow[]);
     setLoadingRecent(false);
   };
 

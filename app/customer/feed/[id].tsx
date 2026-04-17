@@ -20,6 +20,7 @@ import { theme } from '@/constants/theme';
 import { StaffNameWithBadge } from '@/components/VerifiedBadge';
 import { CachedImage } from '@/components/CachedImage';
 import { getOrCreateGuestForCurrentSession } from '@/lib/getOrCreateGuestForCaller';
+import { guestDisplayName, isOpaqueGuestDisplayString } from '@/lib/guestDisplayName';
 import { sendNotification } from '@/lib/notificationService';
 import { useAuthStore } from '@/stores/authStore';
 import { formatDistanceToNow } from 'date-fns';
@@ -56,14 +57,23 @@ function getDisplayName(): string {
   const { user } = useAuthStore.getState();
   if (!user) return '';
   const name = user.user_metadata?.full_name ?? user.user_metadata?.name;
-  if (name && typeof name === 'string') return name.trim();
+  if (name && typeof name === 'string') {
+    const t = name.trim();
+    if (t && !isOpaqueGuestDisplayString(t)) return t;
+  }
   const email = user.email ?? '';
   const part = email.split('@')[0];
-  return part ? part.charAt(0).toUpperCase() + part.slice(1) : 'Misafir';
+  if (part) {
+    const cap = part.charAt(0).toUpperCase() + part.slice(1);
+    if (!isOpaqueGuestDisplayString(cap)) return cap;
+  }
+  return 'Misafir';
 }
 
 export default function CustomerFeedPostDetail() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const params = useLocalSearchParams<{ id?: string | string[] }>();
+  const id = Array.isArray(params.id) ? params.id[0] : params.id;
+  const idNorm = id && typeof id === 'string' ? id.trim() : '';
   const router = useRouter();
   const { width: winWidth } = useWindowDimensions();
   const { user } = useAuthStore();
@@ -82,7 +92,7 @@ export default function CustomerFeedPostDetail() {
   const [deleting, setDeleting] = useState(false);
 
   const loadPost = useCallback(async () => {
-    if (!id) return;
+    if (!idNorm) return;
     const guestRow = user ? await getOrCreateGuestForCurrentSession() : null;
     setMyGuestId(guestRow?.guest_id ?? null);
     const hidden = guestRow?.guest_id
@@ -91,8 +101,8 @@ export default function CustomerFeedPostDetail() {
     const { data, error: e } = await supabase
       .from('feed_posts')
       .select('id, media_type, media_url, thumbnail_url, title, created_at, staff_id, guest_id, lat, lng, location_label, staff:staff_id(full_name, department, verification_badge, deleted_at), guest:guest_id(full_name, deleted_at)')
-      .eq('id', id)
-      .eq('visibility', 'customers')
+      .eq('id', idNorm)
+      .in('visibility', ['customers', 'guests_only'])
       .maybeSingle();
     if (e) {
       setError('Yüklenemedi.');
@@ -117,9 +127,9 @@ export default function CustomerFeedPostDetail() {
     setError(data ? null : 'Paylaşım bulunamadı.');
     if (!data) return;
     const [reactionsRes, commentsRes, myRes] = await Promise.all([
-      supabase.from('feed_post_reactions').select('post_id').eq('post_id', id),
-      supabase.from('feed_post_comments').select('id, staff_id, guest_id, content, created_at, staff:staff_id(full_name, profile_image, deleted_at), guest:guest_id(full_name, photo_url, deleted_at)').eq('post_id', id).order('created_at', { ascending: true }),
-      guestRow ? supabase.from('feed_post_reactions').select('post_id').eq('post_id', id).eq('guest_id', guestRow.guest_id) : Promise.resolve({ data: [] as { post_id: string }[] }),
+      supabase.from('feed_post_reactions').select('post_id').eq('post_id', idNorm),
+      supabase.from('feed_post_comments').select('id, staff_id, guest_id, content, created_at, staff:staff_id(full_name, profile_image, deleted_at), guest:guest_id(full_name, photo_url, deleted_at)').eq('post_id', idNorm).order('created_at', { ascending: true }),
+      guestRow ? supabase.from('feed_post_reactions').select('post_id').eq('post_id', idNorm).eq('guest_id', guestRow.guest_id) : Promise.resolve({ data: [] as { post_id: string }[] }),
     ]);
     const reactions = (reactionsRes.data ?? []) as { post_id: string }[];
     const commentList = ((commentsRes.data ?? []) as CommentRow[]).filter(
@@ -135,19 +145,19 @@ export default function CustomerFeedPostDetail() {
     setComments(commentList);
     setMyLike(myReactions.length > 0);
     if (guestRow) {
-      supabase.from('feed_post_views').insert({ post_id: id, guest_id: guestRow.guest_id }).then(() => {}).catch(() => {});
+      supabase.from('feed_post_views').insert({ post_id: idNorm, guest_id: guestRow.guest_id }).then(() => {}).catch(() => {});
     }
-  }, [id, user]);
+  }, [idNorm, user]);
 
   useEffect(() => {
-    if (!id) {
+    if (!idNorm) {
       setLoading(false);
       setError('Paylaşım bulunamadı.');
       return;
     }
     setVideoLoading(true);
     loadPost().then(() => setLoading(false));
-  }, [id, loadPost]);
+  }, [idNorm, loadPost]);
 
   // Video yüklenme overlay'ı bazen onLoad tetiklenmeyebilir; bir süre sonra kaldır
   useEffect(() => {
@@ -179,8 +189,9 @@ export default function CustomerFeedPostDetail() {
   const rawGuest = post.guest as { full_name?: string | null } | null;
   const staffInfo = Array.isArray(rawStaff) ? rawStaff[0] ?? null : rawStaff;
   const guestInfo = Array.isArray(rawGuest) ? rawGuest[0] ?? null : rawGuest;
-  const authorName = (staffInfo?.full_name ?? guestInfo?.full_name ?? 'Misafir').trim() || 'Misafir';
-  const staffName = staffInfo ? authorName : (guestInfo ? authorName : 'Misafir');
+  const authorName = staffInfo
+    ? (staffInfo.full_name?.trim() || 'Personel')
+    : guestDisplayName(guestInfo?.full_name, 'Misafir');
   const dept = staffInfo?.department;
   const badge = staffInfo?.verification_badge ?? null;
   const imageUri = post.media_type !== 'text' ? (post.thumbnail_url || post.media_url) : null;
@@ -340,8 +351,14 @@ export default function CustomerFeedPostDetail() {
         <View style={styles.body}>
           <Text style={styles.title}>{post.title || (isVideo ? 'Video' : post.media_type === 'text' ? 'Metin' : 'Fotoğraf')}</Text>
           <View style={styles.metaRow}>
-            <StaffNameWithBadge name={staffName} badge={badge} textStyle={styles.metaText} />
-            {dept ? <Text style={styles.metaText}> · {dept}</Text> : guestInfo ? <Text style={styles.metaText}> · Misafir</Text> : null}
+            {staffInfo ? (
+              <>
+                <StaffNameWithBadge name={authorName} badge={badge} textStyle={styles.metaText} />
+                {dept ? <Text style={styles.metaText}> · {dept}</Text> : null}
+              </>
+            ) : (
+              <Text style={styles.metaText}>{authorName}</Text>
+            )}
           </View>
           <Text style={styles.date}>{new Date(post.created_at).toLocaleString('tr-TR')}</Text>
           <View style={styles.actionsRow}>
@@ -367,7 +384,10 @@ export default function CustomerFeedPostDetail() {
           <View style={styles.commentsBlock}>
             <Text style={styles.commentsTitle}>Yorumlar</Text>
             {comments.map((c) => {
-              const authorName = (c.staff?.full_name ?? c.guest?.full_name ?? '—').trim() || '—';
+              const isGuestComment = !c.staff_id && !!c.guest_id;
+              const cAuthor = isGuestComment
+                ? guestDisplayName(c.guest?.full_name, '—')
+                : ((c.staff?.full_name ?? '—').trim() || '—');
               const avatarUri = c.staff?.profile_image ?? c.guest?.photo_url ?? null;
               const profileHref = c.staff_id ? `/customer/staff/${c.staff_id}` : c.guest_id ? `/customer/guest/${c.guest_id}` : null;
               const canDelete = !!(myGuestId && c.guest_id && c.guest_id === myGuestId && !c.staff_id);
@@ -382,12 +402,12 @@ export default function CustomerFeedPostDetail() {
                   {avatarUri ? (
                     <CachedImage uri={avatarUri} style={styles.commentAvatar} contentFit="cover" />
                   ) : (
-                    <View style={styles.commentAvatarPlaceholder}>
-                      <Text style={styles.commentAvatarInitial}>{(authorName || '—').charAt(0).toUpperCase()}</Text>
+                    <View style={isGuestComment ? styles.commentAvatarPlaceholderGuest : styles.commentAvatarPlaceholder}>
+                      <Text style={isGuestComment ? styles.commentAvatarInitialGuest : styles.commentAvatarInitial}>{(cAuthor || '—').charAt(0).toUpperCase()}</Text>
                     </View>
                   )}
                   <View style={styles.commentRowBody}>
-                    <Text style={styles.commentAuthor}>{authorName}</Text>
+                    <Text style={styles.commentAuthor}>{cAuthor}</Text>
                     <Text style={styles.commentText}>{c.content}</Text>
                     <View style={styles.commentMetaRow}>
                       <Text style={styles.commentTime}>{formatDistanceToNow(new Date(c.created_at), { addSuffix: true, locale: tr })}</Text>
@@ -490,7 +510,16 @@ const styles = StyleSheet.create({
   commentRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12, gap: 10 },
   commentAvatar: { width: 32, height: 32, borderRadius: 16 },
   commentAvatarPlaceholder: { width: 32, height: 32, borderRadius: 16, backgroundColor: theme.colors.borderLight, justifyContent: 'center', alignItems: 'center' },
+  commentAvatarPlaceholderGuest: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: theme.colors.guestAvatarBg,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   commentAvatarInitial: { fontSize: 14, fontWeight: '700', color: theme.colors.textSecondary },
+  commentAvatarInitialGuest: { fontSize: 14, fontWeight: '700', color: theme.colors.guestAvatarLetter },
   commentRowBody: { flex: 1, minWidth: 0 },
   commentAuthor: { fontSize: 14, fontWeight: '700', color: theme.colors.text },
   commentText: { fontSize: 14, color: theme.colors.text, marginTop: 2 },

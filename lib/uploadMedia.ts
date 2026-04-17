@@ -76,6 +76,24 @@ export async function uriToArrayBuffer(uri: string): Promise<ArrayBuffer> {
   return await new Response(blob).arrayBuffer();
 }
 
+/**
+ * Android'de galeri `content://` URI'leri çoğu zaman önizlemede görünmez; cache'e kopyalanmış `file://` yolu kullanın.
+ * Görev eki önizlemesi (CachedImage / Video) ve tutarlı yükleme için seçim sonrası çağrılabilir.
+ */
+export async function copyAndroidContentUriToCacheForPreview(uri: string, kind: 'image' | 'video'): Promise<string> {
+  const normalized = (uri || '').trim();
+  if (Platform.OS !== 'android' || !normalized.startsWith('content://')) {
+    return normalized;
+  }
+  const base = FileSystem.cacheDirectory;
+  if (!base) return normalized;
+  const ext = kind === 'video' ? 'mp4' : 'jpg';
+  const name = `preview_${Date.now()}_${Math.random().toString(36).slice(2, 11)}.${ext}`;
+  const dest = `${base}${name}`;
+  await FileSystem.copyAsync({ from: normalized, to: dest });
+  return dest;
+}
+
 /** URI veya dosya adından MIME ve uzantı tahmini. */
 export function getMimeAndExt(
   uriOrFileName: string,

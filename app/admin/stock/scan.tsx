@@ -28,6 +28,10 @@ export default function AdminStockScanScreen() {
     const wasFoundInDb = !!product;
 
     if (!product) {
+      if (!staff?.organization_id) {
+        Alert.alert('Hata', 'İşletme bilgisi eksik. Profilinizden işletme atanmış olmalı.');
+        return;
+      }
       // Barkoda kayıtlı ürün yok: hemen yeni ürün oluştur (barkod eklensin)
       const newName = `Ürün - ${barcode}`;
       const { data: newProduct, error: insertErr } = await supabase
@@ -37,6 +41,7 @@ export default function AdminStockScanScreen() {
           barcode,
           unit: 'adet',
           current_stock: 0,
+          organization_id: staff.organization_id,
         })
         .select('id, name')
         .single();

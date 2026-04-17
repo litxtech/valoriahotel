@@ -16,6 +16,7 @@ import { supabase } from '@/lib/supabase';
 import { MESSAGING_COLORS } from '@/lib/messaging';
 import { sendNotification } from '@/lib/notificationService';
 import { CachedImage } from '@/components/CachedImage';
+import { sortStaffAdminFirst } from '@/lib/sortStaffAdminFirst';
 
 type GuestRow = { id: string; full_name: string | null; photo_url?: string | null; room_id: string | null; rooms: { room_number: string } | null };
 type StaffRow = { id: string; full_name: string | null; department: string | null; profile_image: string | null; is_online: boolean | null; role?: string | null };
@@ -120,11 +121,9 @@ export default function AdminNewChatScreen() {
     );
   }
 
-  const staffSorted = [...staffList].sort((a, b) => {
-    const aAdmin = (a.role === 'admin') ? 0 : 1;
-    const bAdmin = (b.role === 'admin') ? 0 : 1;
-    return aAdmin - bAdmin || (a.full_name || '').localeCompare(b.full_name || '');
-  });
+  const staffSorted = sortStaffAdminFirst(staffList, (a, b) =>
+    (a.full_name || '').localeCompare(b.full_name || '', 'tr')
+  );
 
   const sections: { title: string; data: { id: string; name: string; sub: string; type: 'guest' | 'staff'; avatar?: string | null }[] }[] = [
     {

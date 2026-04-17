@@ -15,6 +15,11 @@ interface StaffProfile {
   work_status?: string | null;
   banned_until?: string | null;
   deleted_at?: string | null;
+  /** Admin panelinde checkbox ile verilen yetkiler (gorev_ata vb.) */
+  app_permissions?: Record<string, boolean> | null;
+  /** Valoria / Bavul Suite / Bavultur vb. */
+  organization_id: string;
+  organization?: { name: string; slug?: string | null; kind?: string | null } | null;
 }
 
 interface AuthState {
@@ -54,7 +59,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (user) {
         const { data, error: staffError } = await supabase
           .from('staff')
-          .select('id, auth_id, email, full_name, role, department, profile_image, work_status, is_active, banned_until, deleted_at')
+          .select(
+            'id, auth_id, email, full_name, role, department, profile_image, work_status, is_active, banned_until, deleted_at, app_permissions, organization_id, organization:organization_id(name, slug, kind)'
+          )
           .eq('auth_id', user.id)
           .maybeSingle();
         if (staffError) {
@@ -65,6 +72,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             staff = null;
             log.info('authStore', 'staff yok, müşteri oturumu korunuyor');
           } else {
+            const perms =
+              typeof row.app_permissions === 'object' && row.app_permissions !== null && !Array.isArray(row.app_permissions)
+                ? (row.app_permissions as Record<string, boolean>)
+                : null;
+            const org = (row as { organization?: { name?: string; slug?: string | null; kind?: string | null } | null }).organization;
             staff = {
               id: row.id,
               auth_id: row.auth_id,
@@ -76,6 +88,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
               work_status: row.work_status,
               banned_until: row.banned_until,
               deleted_at: row.deleted_at,
+              app_permissions: perms,
+              organization_id: (row as { organization_id: string }).organization_id,
+              organization: org?.name
+                ? { name: org.name, slug: org.slug ?? undefined, kind: org.kind ?? undefined }
+                : null,
             };
             if (row.deleted_at) log.info('authStore', 'staff silinmiş, lobiye yönlendirilecek');
             else if (row.banned_until && new Date(row.banned_until) > new Date()) log.info('authStore', 'staff banlı, lobiye yönlendirilecek');

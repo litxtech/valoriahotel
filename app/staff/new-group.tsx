@@ -6,11 +6,13 @@ import { staffCreateGroupConversation } from '@/lib/messagingApi';
 import { supabase } from '@/lib/supabase';
 import { MESSAGING_COLORS } from '@/lib/messaging';
 import { sendNotification } from '@/lib/notificationService';
+import { sortStaffAdminFirst } from '@/lib/sortStaffAdminFirst';
 
 type StaffRow = {
   id: string;
   full_name: string | null;
   department: string | null;
+  role?: string | null;
 };
 
 export default function StaffNewGroupScreen() {
@@ -33,12 +35,16 @@ export default function StaffNewGroupScreen() {
       }
       const { data } = await supabase
         .from('staff')
-        .select('id, full_name, department')
+        .select('id, full_name, department, role')
         .eq('is_active', true)
         .neq('id', staff.id)
         .order('full_name');
       if (cancelled) return;
-      setStaffList((data ?? []) as StaffRow[]);
+      setStaffList(
+        sortStaffAdminFirst((data ?? []) as StaffRow[], (a, b) =>
+          (a.full_name || '').localeCompare(b.full_name || '', 'tr')
+        )
+      );
       setLoading(false);
     })();
     return () => {

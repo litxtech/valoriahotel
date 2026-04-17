@@ -14,6 +14,7 @@ import {
   Linking,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import type { HubReview } from '@/components/StaffEvaluationHub';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
@@ -24,8 +25,10 @@ import { StaffNameWithBadge, AvatarWithBadge } from '@/components/VerifiedBadge'
 import { CachedImage } from '@/components/CachedImage';
 import { ImagePreviewModal } from '@/components/ImagePreviewModal';
 import { blockUserForStaff, getHiddenUsersForStaff } from '@/lib/userBlocks';
+import { StaffEvaluationHub, StaffReviewsFullModal } from '@/components/StaffEvaluationHub';
+import { resolveStaffEvaluation } from '@/lib/staffEvaluation';
+import { loadStaffProfileForViewer } from '@/lib/loadStaffProfileForViewer';
 
-const OTHER_STAFF_REVIEW_LIMIT = 5;
 const COVER_HEIGHT = 260;
 const AVATAR_SIZE = 116;
 const HEADER_AVATAR_SIZE = 64;
@@ -50,33 +53,37 @@ type StaffProfile = {
   verification_badge?: 'blue' | 'yellow' | null;
   shift?: { start_time: string; end_time: string } | null;
   role?: string | null;
-  show_gold_profile_border?: boolean | null;
   phone?: string | null;
   email?: string | null;
   whatsapp?: string | null;
   show_phone_to_guest?: boolean | null;
   show_email_to_guest?: boolean | null;
   show_whatsapp_to_guest?: boolean | null;
+  evaluation_score?: number | null;
+  evaluation_discipline?: number | null;
+  evaluation_communication?: number | null;
+  evaluation_speed?: number | null;
+  evaluation_responsibility?: number | null;
+  evaluation_insight?: string | null;
 };
 
-type ReviewRow = {
-  id: string;
-  rating: number;
-  comment: string | null;
-  created_at: string;
-};
+function formatReviewDateShort(iso: string) {
+  return new Date(iso).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', year: 'numeric' });
+}
 
 export default function StaffProfileViewScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const params = useLocalSearchParams<{ id?: string | string[] }>();
+  const id = typeof params.id === 'string' ? params.id : Array.isArray(params.id) ? params.id[0] : undefined;
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { staff: me } = useAuthStore();
   const [profile, setProfile] = useState<StaffProfile | null>(null);
-  const [reviews, setReviews] = useState<ReviewRow[]>([]);
+  const [reviews, setReviews] = useState<HubReview[]>([]);
   const [loading, setLoading] = useState(true);
   const [coverModalVisible, setCoverModalVisible] = useState(false);
   const [avatarModalVisible, setAvatarModalVisible] = useState(false);
   const [profileMenuVisible, setProfileMenuVisible] = useState(false);
+  const [reviewsModalVisible, setReviewsModalVisible] = useState(false);
 
   useEffect(() => {
     if (!id) {
@@ -92,15 +99,7 @@ export default function StaffProfileViewScreen() {
           return;
         }
       }
-      const { data, error } = await supabase
-        .from('staff')
-        .select(
-          'id, full_name, department, position, profile_image, cover_image, bio, is_online, hire_date, average_rating, total_reviews, specialties, languages, office_location, achievements, verification_badge, shift_id, role, show_gold_profile_border, phone, email, whatsapp, show_phone_to_guest, show_email_to_guest, show_whatsapp_to_guest'
-        )
-        .eq('id', id)
-        .eq('is_active', true)
-        .is('deleted_at', null)
-        .maybeSingle();
+      const { data, error } = await loadStaffProfileForViewer(id);
       if (error || !data) {
         setProfile(null);
         setLoading(false);
@@ -118,11 +117,58 @@ export default function StaffProfileViewScreen() {
       setProfile(s);
       const { data: r } = await supabase
         .from('staff_reviews')
-        .select('id, rating, comment, created_at')
+        .select('id, rating, comment, created_at, guest_id, stay_room_label, stay_nights_label')
         .eq('staff_id', id)
         .order('created_at', { ascending: false })
-        .limit(OTHER_STAFF_REVIEW_LIMIT);
-      setReviews((r ?? []) as ReviewRow[]);
+        .limit(80);
+      const reviewRows = (r ?? []) as (HubReview & { guest_id?: string })[];
+      if (reviewRows.some((x) => x.guest_id)) {
+        const guestIds = [...new Set(reviewRows.map((x) => x.guest_id).filter(Boolean))] as string[];
+        const { data: guests } = await supabase
+          .from('guests')
+          .select('id, full_name, room_id, photo_url')
+          .in('id', guestIds);
+        const guestList = (guests ?? []) as { id: string; full_name: string | null; room_id: string | null; photo_url: string | null }[];
+        const roomIds = [...new Set(guestList.map((g) => g.room_id).filter(Boolean))] as string[];
+        let roomMap = new Map<string, string>();
+        if (roomIds.length > 0) {
+          const { data: rooms } = await supabase.from('rooms').select('id, room_number').in('id', roomIds);
+          roomMap = new Map((rooms ?? []).map((ro: { id: string; room_number: string }) => [ro.id, ro.room_number]));
+        }
+        const guestMap = new Map(
+          guestList.map((g) => [
+            g.id,
+            {
+              full_name: g.full_name,
+              room_number: g.room_id ? roomMap.get(g.room_id) ?? null : null,
+              photo_url: g.photo_url,
+            },
+          ])
+        );
+        setReviews(
+          reviewRows.map((x) => ({
+            id: x.id,
+            rating: x.rating,
+            comment: x.comment,
+            created_at: x.created_at,
+            stay_room_label: x.stay_room_label,
+            stay_nights_label: x.stay_nights_label,
+            guest: x.guest_id ? guestMap.get(x.guest_id) ?? null : null,
+          }))
+        );
+      } else {
+        setReviews(
+          reviewRows.map((x) => ({
+            id: x.id,
+            rating: x.rating,
+            comment: x.comment,
+            created_at: x.created_at,
+            stay_room_label: x.stay_room_label,
+            stay_nights_label: x.stay_nights_label,
+            guest: null,
+          }))
+        );
+      }
       setLoading(false);
     };
     load();
@@ -188,13 +234,9 @@ export default function StaffProfileViewScreen() {
 
   const avatarUri = profile.profile_image || undefined;
   const isMe = me?.id === profile.id;
-  const showGoldBorder =
-    !isMe &&
-    profile.role === 'admin' &&
-    (profile.show_gold_profile_border ?? false);
 
   return (
-    <View style={[styles.container, showGoldBorder && styles.containerGoldBorder]}>
+    <View style={styles.container}>
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <View style={styles.coverBlock}>
           <TouchableOpacity
@@ -214,7 +256,6 @@ export default function StaffProfileViewScreen() {
               <Ionicons name="ellipsis-horizontal" size={22} color={theme.colors.white} />
             </TouchableOpacity>
           ) : null}
-          <View style={styles.coverGradient} pointerEvents="none" />
           <TouchableOpacity
             style={styles.coverImageClip}
             activeOpacity={1}
@@ -246,14 +287,6 @@ export default function StaffProfileViewScreen() {
       </View>
       <View style={styles.body}>
 
-        {(profile.average_rating != null && profile.average_rating > 0) && (
-          <View style={styles.ratingRow}>
-            <Text style={styles.ratingText}>
-              ★ {Number(profile.average_rating).toFixed(1)} ({profile.total_reviews ?? 0} değerlendirme)
-            </Text>
-          </View>
-        )}
-
         <View style={styles.infoRow}>
           {profile.department && (
             <Row label="Departman" value={profile.department} />
@@ -277,6 +310,25 @@ export default function StaffProfileViewScreen() {
             <Row label="Konum" value={profile.office_location} />
           )}
         </View>
+
+        <StaffEvaluationHub
+          resolved={resolveStaffEvaluation({
+            id: profile.id,
+            evaluation_score: profile.evaluation_score,
+            evaluation_discipline: profile.evaluation_discipline,
+            evaluation_communication: profile.evaluation_communication,
+            evaluation_speed: profile.evaluation_speed,
+            evaluation_responsibility: profile.evaluation_responsibility,
+            evaluation_insight: profile.evaluation_insight,
+            average_rating: profile.average_rating,
+          })}
+          averageRating={profile.average_rating}
+          totalReviews={profile.total_reviews}
+          reviews={reviews}
+          previewLimit={3}
+          onOpenAllReviews={() => setReviewsModalVisible(true)}
+          formatReviewDate={formatReviewDateShort}
+        />
 
         {profile.is_online != null && (
           <View style={styles.onlineRow}>
@@ -320,20 +372,6 @@ export default function StaffProfileViewScreen() {
             ))}
           </View>
         ) : null}
-
-        {reviews.length > 0 && (
-          <View style={styles.block}>
-            <Text style={styles.blockTitle}>Son değerlendirmeler</Text>
-            {reviews.map((r) => (
-              <View key={r.id} style={styles.reviewCard}>
-                <Text style={styles.reviewStars}>{'★'.repeat(r.rating)}</Text>
-                {r.comment ? (
-                  <Text style={styles.reviewComment}>{r.comment}</Text>
-                ) : null}
-              </View>
-            ))}
-          </View>
-        )}
 
         {!isMe && (() => {
           const showPhone = !!profile.phone?.trim();
@@ -434,7 +472,16 @@ export default function StaffProfileViewScreen() {
         uri={profile.profile_image ?? null}
         onClose={() => setAvatarModalVisible(false)}
       />
+
       </ScrollView>
+
+      <StaffReviewsFullModal
+        visible={reviewsModalVisible}
+        onClose={() => setReviewsModalVisible(false)}
+        staffName={profile.full_name || '—'}
+        reviews={reviews}
+        formatReviewDate={formatReviewDateShort}
+      />
     </View>
   );
 }
@@ -448,16 +495,8 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-const GOLD_COLOR = '#D4AF37';
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.backgroundSecondary },
-  containerGoldBorder: {
-    borderLeftWidth: 4,
-    borderRightWidth: 4,
-    borderTopWidth: 4,
-    borderColor: GOLD_COLOR,
-  },
   scroll: { flex: 1 },
   scrollContent: { paddingBottom: 32 },
   centered: {
@@ -496,15 +535,6 @@ const styles = StyleSheet.create({
   },
   coverBackBtn: { left: 16 },
   coverMenuBtn: { right: 16 },
-  coverGradient: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 100,
-    zIndex: 2,
-    backgroundColor: 'rgba(0,0,0,0.2)',
-  },
   coverImageClip: {
     position: 'absolute',
     top: 0,
@@ -561,8 +591,6 @@ const styles = StyleSheet.create({
   nameBlock: { alignItems: 'center', marginBottom: 4 },
   name: { ...theme.typography.title, fontSize: 24, color: theme.colors.text, textAlign: 'center', marginBottom: 6 },
   dept: { fontSize: 16, fontWeight: '600', color: theme.colors.primary, textAlign: 'center', marginBottom: 8 },
-  ratingRow: { alignItems: 'center', marginBottom: 12 },
-  ratingText: { fontSize: 14, color: theme.colors.primary, fontWeight: '600' },
   infoRow: { marginTop: 8 },
   row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 },
   rowLabel: { fontSize: 13, color: theme.colors.textMuted },

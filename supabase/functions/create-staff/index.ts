@@ -8,6 +8,13 @@ const CORS = {
 };
 
 const STAFF_ROLES = ["admin", "reception_chief", "receptionist", "housekeeping", "technical", "security"] as const;
+const CONTRACT_TYPES = ["full_time", "fixed_term", "seasonal", "intern", "other"] as const;
+
+function normalizeContractType(v: unknown): string | null {
+  const s = typeof v === "string" ? v.trim() : "";
+  if (!s) return null;
+  return CONTRACT_TYPES.includes(s as (typeof CONTRACT_TYPES)[number]) ? s : null;
+}
 
 type CreateStaffBody = {
   email: string;
@@ -30,6 +37,14 @@ type CreateStaffBody = {
   work_days?: number[] | null;
   shift_type?: string | null;
   notes?: string | null;
+  /** Hangi otel / tur ofisi — zorunlu */
+  organization_id?: string | null;
+  contract_type?: string | null;
+  termination_date?: string | null;
+  internal_extension?: string | null;
+  certifications_summary?: string | null;
+  kvkk_consent_at?: string | null;
+  drives_vehicle?: boolean | null;
 };
 
 Deno.serve(async (req: Request) => {
@@ -143,6 +158,13 @@ Deno.serve(async (req: Request) => {
       work_days,
       shift_type,
       notes,
+      organization_id,
+      contract_type,
+      termination_date,
+      internal_extension,
+      certifications_summary,
+      kvkk_consent_at,
+      drives_vehicle,
     } = body;
 
     if (!email?.trim() || !password || !full_name?.trim()) {
@@ -154,6 +176,25 @@ Deno.serve(async (req: Request) => {
     if (!STAFF_ROLES.includes(role as typeof STAFF_ROLES[number])) {
       return new Response(
         JSON.stringify({ error: "Geçersiz role" }),
+        { status: 400, headers: { ...CORS, "Content-Type": "application/json" } }
+      );
+    }
+
+    const orgId = typeof organization_id === "string" && organization_id.trim() ? organization_id.trim() : null;
+    if (!orgId) {
+      return new Response(
+        JSON.stringify({ error: "İşletme (organization_id) seçimi zorunludur." }),
+        { status: 400, headers: { ...CORS, "Content-Type": "application/json" } }
+      );
+    }
+    const { data: orgRow, error: orgErr } = await supabaseAdmin
+      .from("organizations")
+      .select("id")
+      .eq("id", orgId)
+      .maybeSingle();
+    if (orgErr || !orgRow?.id) {
+      return new Response(
+        JSON.stringify({ error: "Geçersiz işletme seçimi." }),
         { status: 400, headers: { ...CORS, "Content-Type": "application/json" } }
       );
     }
@@ -201,6 +242,13 @@ Deno.serve(async (req: Request) => {
       shift_type: shift_type?.trim() || null,
       notes: notes?.trim() || null,
       is_active: true,
+      organization_id: orgId,
+      contract_type: normalizeContractType(contract_type),
+      termination_date: termination_date && String(termination_date).trim() ? String(termination_date).trim().slice(0, 10) : null,
+      internal_extension: internal_extension?.trim() || null,
+      certifications_summary: certifications_summary?.trim() || null,
+      kvkk_consent_at: kvkk_consent_at && String(kvkk_consent_at).trim() ? String(kvkk_consent_at).trim().slice(0, 10) : null,
+      drives_vehicle: drives_vehicle === true,
     });
     if (insertError) {
       const imsg = insertError.message || "";

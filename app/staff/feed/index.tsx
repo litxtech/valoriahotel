@@ -35,6 +35,9 @@ import { formatDateTime } from '@/lib/date';
 import { log } from '@/lib/logger';
 import { blockUserForStaff, getHiddenUsersForStaff } from '@/lib/userBlocks';
 import { POST_TAGS, type PostTagValue } from '@/lib/feedPostTags';
+import { StaffFeedPostCard } from '@/components/StaffFeedPostCard';
+import { guestDisplayName } from '@/lib/guestDisplayName';
+import { sortStaffAdminFirst } from '@/lib/sortStaffAdminFirst';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -98,6 +101,7 @@ type StaffAvatarRow = {
   department: string | null;
   position: string | null;
   verification_badge?: 'blue' | 'yellow' | null;
+  role?: string | null;
 };
 
 type GuestAvatarRow = {
@@ -204,19 +208,50 @@ export default function StaffHomeScreen() {
     };
   }, [commentsSheetPostId]);
 
-  // Bildirimden tıklanınca ilgili gönderinin yorum kartını aç (openPostId)
+  // Bildirimden tıklanınca yorum kartı açılmaz; gönderi listede görünsün diye etiket filtresi sıfırlanır ve karta kaydırılır
   useEffect(() => {
     const postId = params.openPostId;
     if (postId) {
-      setCommentsSheetPostId(postId);
+      setFeedTagFilter(null);
+      pendingScrollPostId.current = postId;
       router.setParams({ openPostId: undefined });
     }
   }, [params.openPostId, router]);
 
+  useEffect(() => {
+    const id = pendingScrollPostId.current;
+    if (!id) return;
+    const filtered = feedTagFilter ? posts.filter((p) => (p.post_tag ?? null) === feedTagFilter) : posts;
+    if (!filtered.some((p) => p.id === id)) {
+      const t = setTimeout(() => {
+        if (pendingScrollPostId.current === id) pendingScrollPostId.current = null;
+      }, 2500);
+      return () => clearTimeout(t);
+    }
+    const attempt = () => {
+      if (pendingScrollPostId.current !== id) return;
+      const y = postYRef.current[id];
+      if (y != null && scrollRef.current) {
+        scrollRef.current.scrollTo({ y: Math.max(0, y - 20), animated: true });
+        pendingScrollPostId.current = null;
+      }
+    };
+    const raf = requestAnimationFrame(attempt);
+    const t1 = setTimeout(attempt, 80);
+    const t2 = setTimeout(attempt, 250);
+    const t3 = setTimeout(attempt, 600);
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+    };
+  }, [posts, feedTagFilter]);
+
   const loadStaffList = useCallback(async (hiddenStaffIds?: Set<string>) => {
     const { data } = await supabase
       .from('staff')
-      .select('id, full_name, profile_image, department, position, verification_badge, email')
+      .select('id, full_name, profile_image, department, position, verification_badge, email, role')
       .eq('is_active', true)
       .is('deleted_at', null)
       .order('full_name');
@@ -226,14 +261,23 @@ export default function StaffHomeScreen() {
       const key = (r.email && r.email.trim()) ? r.email.trim().toLowerCase() : r.id;
       if (!byKey.has(key)) byKey.set(key, r);
     });
-    setStaffList(Array.from(byKey.values()).map(({ id, full_name, profile_image, department, position, verification_badge }) => ({
-      id,
-      full_name,
-      profile_image,
-      department,
-      position,
-      verification_badge,
-    })).filter((s) => !(hiddenStaffIds?.has(s.id))) as StaffAvatarRow[]);
+    const mapped = Array.from(byKey.values()).map(
+      ({ id, full_name, profile_image, department, position, verification_badge, role }) => ({
+        id,
+        full_name,
+        profile_image,
+        department,
+        position,
+        verification_badge,
+        role,
+      })
+    );
+    const visible = mapped.filter((s) => !hiddenStaffIds?.has(s.id));
+    setStaffList(
+      sortStaffAdminFirst(visible, (a, b) =>
+        (a.full_name || '').localeCompare(b.full_name || '', 'tr')
+      )
+    );
   }, []);
 
   const loadFeed = useCallback(async () => {
@@ -628,9 +672,9 @@ export default function StaffHomeScreen() {
       Alert.alert('Uyarı', 'Kendinizi engelleyemezsiniz.');
       return;
     }
-    const targetName = (post.staff as { full_name?: string | null } | null)?.full_name
-      ?? (post.guest as { full_name?: string | null } | null)?.full_name
-      ?? 'Bu kullanıcı';
+    const targetName = post.staff_id
+      ? ((post.staff as { full_name?: string | null } | null)?.full_name?.trim() || 'Bu kullanıcı')
+      : guestDisplayName((post.guest as { full_name?: string | null } | null)?.full_name, 'Bu kullanıcı');
     Alert.alert('Kullanıcıyı engelle', `${targetName} artık sizi göremez ve siz de onu göremezsiniz.`, [
       { text: 'İptal', style: 'cancel' },
       {
@@ -699,6 +743,8 @@ export default function StaffHomeScreen() {
   };
 
   const scrollRef = useRef<ScrollView>(null);
+  const postYRef = useRef<Record<string, number>>({});
+  const pendingScrollPostId = useRef<string | null>(null);
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
@@ -731,14 +777,6 @@ export default function StaffHomeScreen() {
         }
         keyboardShouldPersistTaps="handled"
       >
-        <View style={styles.feedHeader}>
-          <TouchableOpacity onPress={() => router.push('/staff/feed/new')} style={styles.feedHeaderIconBtn} activeOpacity={0.8} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-            <Ionicons name="add-circle" size={32} color="#b8860b" />
-          </TouchableOpacity>
-          <Text style={styles.feedHeaderTitle}>Akış</Text>
-          <View style={styles.feedHeaderSpacer} />
-        </View>
-
         <View style={styles.staffAvatarsSection}>
           <Text style={styles.staffAvatarsSectionLabel}>Personeller</Text>
           <ScrollView
@@ -790,7 +828,7 @@ export default function StaffHomeScreen() {
               contentContainerStyle={styles.guestAvatarsContent}
             >
               {guestList.map((g) => {
-                const name = (g.full_name ?? 'Misafir').trim() || 'Misafir';
+                const name = guestDisplayName(g.full_name, 'Misafir');
                 const firstName = name.split(' ')[0] || 'Misafir';
                 return (
                   <TouchableOpacity
@@ -871,52 +909,94 @@ export default function StaffHomeScreen() {
             const liked = myLikes.has(p.id);
             const notifOn = notificationPrefs.has(p.id);
             const comments = commentsByPost[p.id] ?? [];
-            const staffInfo = p.staff as { full_name?: string; profile_image?: string; verification_badge?: 'blue' | 'yellow' | null } | null;
+            const staffInfo = p.staff as {
+              full_name?: string;
+              profile_image?: string;
+              department?: string | null;
+              position?: string | null;
+              verification_badge?: 'blue' | 'yellow' | null;
+            } | null;
             const rawGuest = p.guest;
             const guestInfo = Array.isArray(rawGuest) ? (rawGuest[0] as { full_name?: string | null; photo_url?: string | null } | null) : (rawGuest as { full_name?: string | null; photo_url?: string | null } | null);
             const isGuestPost = !p.staff_id;
-            const authorName = staffInfo?.full_name ?? guestInfo?.full_name ?? (isGuestPost ? 'Misafir' : '—');
+            const authorName = isGuestPost
+              ? guestDisplayName(guestInfo?.full_name, 'Misafir')
+              : (staffInfo?.full_name?.trim() || '—');
             const authorAvatar = staffInfo?.profile_image ?? guestInfo?.photo_url ?? null;
             const authorBadge = staffInfo?.verification_badge ?? null;
-            const AuthorWrapper = p.staff_id ? TouchableOpacity : View;
-            const authorWrapperProps = p.staff_id
-              ? { onPress: () => router.push(`/staff/profile/${p.staff_id}`), activeOpacity: 0.7 }
-              : {};
-            return (
-              <View key={p.id} style={styles.postCard}>
-                <View style={styles.postCardAccent} />
-                <View style={styles.postHeaderRow}>
-                  <AuthorWrapper style={styles.postHeader} {...authorWrapperProps}>
-                    <AvatarWithBadge badge={authorBadge} avatarSize={40} badgeSize={12} showBadge={false}>
-                      {authorAvatar ? (
-                        <CachedImage uri={authorAvatar} style={styles.postAuthorAvatarImage} contentFit="cover" />
-                      ) : (
-                        <View style={styles.postAuthorAvatar}>
-                          <Text style={styles.postAuthorLetter}>{(authorName || '?').charAt(0).toUpperCase()}</Text>
-                        </View>
-                      )}
-                    </AvatarWithBadge>
-                    <View style={styles.postAuthorInfo}>
-                      <StaffNameWithBadge name={authorName} badge={authorBadge} textStyle={styles.postAuthorName} />
-                      <Text style={styles.postTime}>{timeAgo(p.created_at) || 'şimdi'}</Text>
-                      <Text style={styles.postDateTime}>{formatDateTime(p.created_at)}</Text>
-                      {isGuestPost ? <Text style={styles.postGuestLabel}>· Misafir</Text> : null}
-                    </View>
-                  </AuthorWrapper>
-                  <TouchableOpacity
-                    style={styles.postMenuBtn}
-                    onPress={() => setMenuPostId(menuPostId === p.id ? null : p.id)}
-                    hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                    activeOpacity={0.7}
-                    disabled={!!deletingPostId}
-                  >
-                    {deletingPostId === p.id ? (
-                      <ActivityIndicator size="small" color={theme.colors.textMuted} />
+            const roleLabel = isGuestPost ? 'Misafir' : (staffInfo?.department || staffInfo?.position || null);
+            const hasMedia = p.media_type !== 'text' && !!(p.thumbnail_url || p.media_url);
+            const mediaEl =
+              hasMedia ? (
+                <TouchableOpacity
+                  activeOpacity={1}
+                  onPress={() => {
+                    const isVideo = p.media_type === 'video';
+                    if (isVideo) {
+                      setFullscreenPostMedia({
+                        uri: p.media_url || p.thumbnail_url || '',
+                        mediaType: 'video',
+                        postId: p.id,
+                        posterUri: p.thumbnail_url || p.media_url || undefined,
+                      });
+                    } else {
+                      setFullscreenPostMedia({
+                        uri: p.thumbnail_url || p.media_url || '',
+                        mediaType: 'image',
+                        postId: p.id,
+                      });
+                    }
+                  }}
+                >
+                  <View style={styles.postImageWrap}>
+                    {p.media_type === 'video' ? (
+                      <Video
+                        source={{ uri: p.media_url || p.thumbnail_url || '' }}
+                        style={styles.postImage}
+                        resizeMode="cover"
+                        muted
+                        shouldPlay={false}
+                        useNativeControls={false}
+                      />
                     ) : (
-                      <Ionicons name="ellipsis-vertical" size={22} color={theme.colors.text} />
+                      <CachedImage uri={p.thumbnail_url || p.media_url || ''} style={styles.postImage} contentFit="cover" />
                     )}
-                  </TouchableOpacity>
-                </View>
+                  </View>
+                </TouchableOpacity>
+              ) : null;
+
+            return (
+              <View key={p.id}>
+                <StaffFeedPostCard
+                  postTag={p.post_tag}
+                  authorName={authorName}
+                  authorAvatarUrl={authorAvatar}
+                  authorBadge={authorBadge}
+                  isGuestPost={isGuestPost}
+                  roleLabel={roleLabel}
+                  timeAgo={timeAgo(p.created_at) || 'şimdi'}
+                  createdAtLabel={formatDateTime(p.created_at)}
+                  title={p.title}
+                  media={mediaEl}
+                  hasMedia={!!hasMedia}
+                  liked={liked}
+                  likeCount={likeCount}
+                  commentCount={commentCount}
+                  viewCount={viewCount}
+                  notifOn={notifOn}
+                  togglingLike={togglingLike === p.id}
+                  togglingNotif={togglingNotif === p.id}
+                  deletingPost={deletingPostId === p.id}
+                  onAuthorPress={p.staff_id ? () => router.push(`/staff/profile/${p.staff_id}`) : undefined}
+                  onLike={() => toggleLike(p.id, p.staff_id, p.guest_id ?? null)}
+                  onComment={() => setCommentsSheetPostId(commentsSheetPostId === p.id ? null : p.id)}
+                  onViewers={() => openViewersModal(p.id)}
+                  onNotif={() => toggleNotificationPref(p.id)}
+                  onMenu={() => setMenuPostId(menuPostId === p.id ? null : p.id)}
+                  onLayout={(y) => {
+                    postYRef.current[p.id] = y;
+                  }}
+                />
                 {/* Menü modal: Sil / Bildir */}
                 <Modal
                   visible={menuPostId === p.id}
@@ -955,99 +1035,6 @@ export default function StaffHomeScreen() {
                     </View>
                   </Pressable>
                 </Modal>
-                {p.media_type !== 'text' && (p.thumbnail_url || p.media_url) ? (
-                  <TouchableOpacity
-                    activeOpacity={1}
-                    onPress={() => {
-                      const isVideo = p.media_type === 'video';
-                      if (isVideo) {
-                        setFullscreenPostMedia({
-                          uri: p.media_url || p.thumbnail_url || '',
-                          mediaType: 'video',
-                          postId: p.id,
-                          posterUri: p.thumbnail_url || p.media_url || undefined,
-                        });
-                      } else {
-                        setFullscreenPostMedia({
-                          uri: p.thumbnail_url || p.media_url || '',
-                          mediaType: 'image',
-                          postId: p.id,
-                        });
-                      }
-                    }}
-                  >
-                    <View style={styles.postImageWrap}>
-                      {p.media_type === 'video' ? (
-                        <Video
-                          source={{ uri: p.media_url || p.thumbnail_url || '' }}
-                          style={styles.postImage}
-                          resizeMode="cover"
-                          muted
-                          shouldPlay={false}
-                          useNativeControls={false}
-                        />
-                      ) : (
-                        <CachedImage uri={p.thumbnail_url || p.media_url || ''} style={styles.postImage} contentFit="cover" />
-                      )}
-                    </View>
-                  </TouchableOpacity>
-                ) : null}
-                <View style={styles.postBody}>
-                  {(p.title ?? '').trim() ? (
-                    <Text style={styles.postTitle}>{p.title}</Text>
-                  ) : null}
-                  <View style={styles.postActions}>
-                    <TouchableOpacity
-                      style={styles.postActionBtn}
-                      onPress={() => toggleLike(p.id, p.staff_id, p.guest_id ?? null)}
-                      disabled={!!togglingLike}
-                      activeOpacity={0.7}
-                    >
-                      {togglingLike === p.id ? (
-                        <ActivityIndicator size="small" color={theme.colors.primary} />
-                      ) : (
-                        <Ionicons
-                          name={liked ? 'heart' : 'heart-outline'}
-                          size={26}
-                          color={liked ? theme.colors.error : theme.colors.text}
-                        />
-                      )}
-                      <Text style={styles.postActionCount}>{likeCount}</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.postActionBtn}
-                      onPress={() => setCommentsSheetPostId(commentsSheetPostId === p.id ? null : p.id)}
-                      activeOpacity={0.7}
-                    >
-                      <Ionicons name="chatbubble-outline" size={22} color={theme.colors.text} />
-                      <Text style={styles.postActionCount}>{commentCount}</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.postActionBtn}
-                      onPress={() => openViewersModal(p.id)}
-                      activeOpacity={0.7}
-                    >
-                      <Ionicons name="eye-outline" size={22} color={theme.colors.text} />
-                      <Text style={styles.postActionCount}>{viewCount}</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.postActionBtn}
-                      onPress={() => toggleNotificationPref(p.id)}
-                      disabled={!!togglingNotif}
-                      activeOpacity={0.7}
-                    >
-                      {togglingNotif === p.id ? (
-                        <ActivityIndicator size="small" color={theme.colors.primary} />
-                      ) : (
-                        <Ionicons
-                          name={notifOn ? 'notifications' : 'notifications-outline'}
-                          size={22}
-                          color={notifOn ? theme.colors.primary : theme.colors.text}
-                        />
-                      )}
-                    </TouchableOpacity>
-                  </View>
-                </View>
               </View>
             );
           });
@@ -1148,7 +1135,9 @@ export default function StaffHomeScreen() {
                     const v = item as ViewerRow;
                     const staffData = v.staff as { full_name?: string; profile_image?: string; verification_badge?: 'blue' | 'yellow' | null } | null;
                     const guestData = v.guest as { full_name?: string | null; photo_url?: string | null } | null;
-                    const name = staffData?.full_name ?? guestData?.full_name ?? '—';
+                    const name = v.guest_id
+                      ? guestDisplayName(guestData?.full_name, '—')
+                      : (staffData?.full_name?.trim() || '—');
                     const img = staffData?.profile_image ?? guestData?.photo_url ?? null;
                     const badge = staffData?.verification_badge ?? null;
                     const isGuest = !!v.guest_id;
@@ -1158,7 +1147,7 @@ export default function StaffHomeScreen() {
                           {img ? (
                             <CachedImage uri={img} style={styles.viewerAvatar} contentFit="cover" />
                           ) : (
-                            <View style={[styles.viewerAvatar, styles.viewerAvatarLetter]}>
+                            <View style={[styles.viewerAvatar, isGuest ? styles.viewerAvatarLetterGuest : styles.viewerAvatarLetter]}>
                               <Text style={styles.viewerAvatarText}>{name.charAt(0).toUpperCase()}</Text>
                             </View>
                           )}
@@ -1227,7 +1216,10 @@ export default function StaffHomeScreen() {
                       <Text style={styles.commentSheetEmpty}>Henüz yorum yok. İlk yorumu sen yap.</Text>
                     ) : (
                       comments.map((c) => {
-                        const authorName = (c.staff as { full_name?: string } | null)?.full_name ?? (c.guest as { full_name?: string | null } | null)?.full_name ?? '—';
+                        const isGuestComment = !c.staff_id && !!c.guest_id;
+                        const authorName = isGuestComment
+                          ? guestDisplayName((c.guest as { full_name?: string | null } | null)?.full_name, '—')
+                          : ((c.staff as { full_name?: string } | null)?.full_name?.trim() || '—');
                         const badge = (c.staff as { verification_badge?: 'blue' | 'yellow' | null } | null)?.verification_badge ?? null;
                         const avatarUri = (c.staff as { profile_image?: string | null } | null)?.profile_image ?? (c.guest as { photo_url?: string | null } | null)?.photo_url ?? null;
                         const profileHref = c.staff_id ? `/staff/profile/${c.staff_id}` : c.guest_id ? `/staff/guests/${c.guest_id}` : null;
@@ -1243,8 +1235,8 @@ export default function StaffHomeScreen() {
                             {avatarUri ? (
                               <CachedImage uri={avatarUri} style={styles.commentSheetAvatar} contentFit="cover" />
                             ) : (
-                              <View style={styles.commentSheetAvatarPlaceholder}>
-                                <Text style={styles.commentSheetAvatarInitial}>{(authorName || '—').charAt(0).toUpperCase()}</Text>
+                              <View style={isGuestComment ? styles.commentSheetAvatarPlaceholderGuest : styles.commentSheetAvatarPlaceholder}>
+                                <Text style={isGuestComment ? styles.commentSheetAvatarInitialGuest : styles.commentSheetAvatarInitial}>{(authorName || '—').charAt(0).toUpperCase()}</Text>
                               </View>
                             )}
                             <View style={styles.commentSheetRowBody}>
@@ -1390,18 +1382,6 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.backgroundSecondary },
   scroll: { flex: 1 },
   content: { paddingBottom: 100 },
-  feedHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: theme.colors.borderLight,
-    backgroundColor: theme.colors.surface,
-  },
-  feedHeaderIconBtn: { padding: 4, marginRight: 12 },
-  feedHeaderTitle: { fontSize: 20, fontWeight: '800', color: theme.colors.text, flex: 1 },
-  feedHeaderSpacer: { width: 36 },
   staffAvatarsSection: {
     backgroundColor: theme.colors.surface,
     paddingVertical: 12,
@@ -1484,7 +1464,7 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: theme.colors.primary,
+    backgroundColor: theme.colors.guestAvatarBg,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1518,50 +1498,6 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primary,
   },
   emptyBtnText: { fontSize: 15, fontWeight: '600', color: theme.colors.white },
-  postCard: {
-    backgroundColor: theme.colors.surface,
-    marginHorizontal: 16,
-    marginTop: 16,
-    marginBottom: 4,
-    paddingBottom: 16,
-    borderRadius: 24,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: theme.colors.primary + '22',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 9 },
-    shadowOpacity: 0.16,
-    shadowRadius: 16,
-    elevation: 9,
-  },
-  postCardAccent: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 4,
-    backgroundColor: theme.colors.primaryLight,
-    zIndex: 2,
-  },
-  postHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 4,
-    paddingRight: 8,
-  },
-  postHeader: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    gap: 12,
-  },
-  postMenuBtn: {
-    padding: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
   menuModalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -1652,25 +1588,6 @@ const styles = StyleSheet.create({
   },
   reportSubmitBtnDisabled: { opacity: 0.5 },
   reportSubmitBtnText: { fontSize: 16, fontWeight: '700', color: theme.colors.white },
-  postAuthorAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: theme.colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  postAuthorAvatarImage: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-  },
-  postAuthorLetter: { fontSize: 18, fontWeight: '700', color: theme.colors.white },
-  postAuthorInfo: { flex: 1, minWidth: 0 },
-  postAuthorName: { fontSize: 15, fontWeight: '700', color: theme.colors.text },
-  postTime: { fontSize: 12, color: theme.colors.textMuted, marginTop: 2 },
-  postDateTime: { fontSize: 11, color: theme.colors.textMuted, marginTop: 1 },
-  postGuestLabel: { fontSize: 11, color: theme.colors.textMuted, marginTop: 2 },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'transparent',
@@ -1716,17 +1633,26 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  viewerAvatarLetterGuest: {
+    backgroundColor: theme.colors.guestAvatarBg,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   viewerAvatarText: { fontSize: 18, fontWeight: '700', color: theme.colors.white },
   viewerInfo: { flex: 1, minWidth: 0 },
   viewerName: { fontSize: 15, fontWeight: '600', color: theme.colors.text },
   viewerTime: { fontSize: 12, color: theme.colors.textMuted, marginTop: 2 },
-  postImageWrap: { position: 'relative', width: '100%' },
+  postImageWrap: {
+    position: 'relative',
+    width: '100%',
+    aspectRatio: 4 / 5,
+    overflow: 'hidden',
+    borderRadius: 16,
+    backgroundColor: theme.colors.borderLight,
+  },
   postImage: {
     width: '100%',
-    height: SCREEN_WIDTH + 140,
-    backgroundColor: theme.colors.borderLight,
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
+    height: '100%',
   },
   videoPlayOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -1734,11 +1660,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: 'rgba(0,0,0,0.25)',
   },
-  postBody: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 4 },
-  postTitle: { fontSize: 16, color: theme.colors.text, marginBottom: 14, lineHeight: 24 },
-  postActions: { flexDirection: 'row', alignItems: 'center', gap: 20 },
-  postActionBtn: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  postActionCount: { fontSize: 14, fontWeight: '600', color: theme.colors.text },
   commentsBlock: {
     marginTop: 12,
     paddingTop: 12,
@@ -1835,10 +1756,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  commentSheetAvatarPlaceholderGuest: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: theme.colors.guestAvatarBg,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   commentSheetAvatarInitial: {
     fontSize: 16,
     fontWeight: '700',
     color: theme.colors.textSecondary,
+  },
+  commentSheetAvatarInitialGuest: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: theme.colors.guestAvatarLetter,
   },
   commentSheetRowBody: { flex: 1, minWidth: 0 },
   commentSheetAuthor: { fontSize: 14, fontWeight: '700', color: theme.colors.text },

@@ -15,6 +15,9 @@ export const theme = {
     primaryLight: '#d4a84b',
     primaryDark: '#8b6914',
     accent: '#0d6efd',
+    /** Misafir avatar placeholder (personel primary altından ayrışır) */
+    guestAvatarBg: '#4a6f8a',
+    guestAvatarLetter: '#ffffff',
     success: '#198754',
     error: '#dc3545',
     white: '#ffffff',

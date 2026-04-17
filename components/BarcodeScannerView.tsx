@@ -60,7 +60,8 @@ export function BarcodeScannerView({
       setCameraMounted(false);
       return;
     }
-    const delay = Platform.OS === 'android' ? 400 : 150;
+    /** Android: izin sonrası CameraView bazen siyah kalıyor; kısa gecikme + tek frame sonra mount */
+    const delay = Platform.OS === 'android' ? 680 : 160;
     const t = setTimeout(() => setCameraMounted(true), delay);
     return () => clearTimeout(t);
   }, [permStatus]);

@@ -37,6 +37,7 @@ type Product = {
   category: { id: string; name: string } | null;
   creator: { full_name: string | null } | null;
   supplier: { name: string } | null;
+  organization: { name: string } | null;
 };
 
 type Movement = {
@@ -68,7 +69,7 @@ export default function StockProductDetailScreen() {
     const { data: prod, error: prodErr } = await supabase
       .from('stock_products')
       .select(
-        'id, name, description, barcode, unit, min_stock, max_stock, current_stock, image_url, purchase_price, selling_price, created_at, updated_at, category_id, created_by, category:stock_categories(id, name), creator:created_by(full_name), supplier:supplier_id(name)'
+        'id, name, description, barcode, unit, min_stock, max_stock, current_stock, image_url, purchase_price, selling_price, created_at, updated_at, category_id, created_by, category:stock_categories(id, name), creator:created_by(full_name), supplier:supplier_id(name), organization:organization_id(name)'
       )
       .eq('id', id)
       .single();
@@ -165,6 +166,7 @@ export default function StockProductDetailScreen() {
         <Row label="🏷️ İsim" value={product.name} />
         <Row label="🔢 Barkod" value={product.barcode ?? '—'} />
         <Row label="📦 Kategori" value={product.category?.name ?? '—'} />
+        <Row label="🏨 İşletme" value={product.organization?.name ?? '—'} />
         <Row label="💰 Fiyat" value={priceStr} />
         <Row label="🏢 Tedarikçi" value={product.supplier?.name ?? '—'} />
         {min > 0 ? <Row label="Kritik stok (min)" value={String(min)} /> : null}

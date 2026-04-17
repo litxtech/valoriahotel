@@ -10,6 +10,14 @@ const EDGE_FN_PUSH = 'send-expo-push';
 const EDGE_FN_NOTIFY_ADMINS = 'notify-admins';
 const EDGE_FN_NOTIFY_CONV_RECIPIENTS = 'notify-conversation-recipients';
 
+type ExpoPushFnResult = {
+  sent?: number;
+  failed?: number;
+  message?: string;
+  expoHttpError?: string;
+  pushTicketErrors?: string[];
+};
+
 /** Push token’ları olan hedeflere Expo push gönderir (sessiz hata). */
 async function sendExpoPushToRecipients(params: {
   guestIds?: string[];
@@ -21,14 +29,23 @@ async function sendExpoPushToRecipients(params: {
   const { guestIds = [], staffIds = [], title, body, data } = params;
   if (guestIds.length === 0 && staffIds.length === 0) return;
   try {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
     const { data: result, error } = await supabase.functions.invoke(EDGE_FN_PUSH, {
       body: { guestIds, staffIds, title, body, data },
+      ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
     });
     if (error) {
       log.warn('notificationService', 'sendExpoPush', error);
       return;
     }
-    const r = result as { sent?: number; failed?: number } | null;
+    const r = result as ExpoPushFnResult | null;
+    if (r?.message) log.warn('notificationService', 'push (sunucu mesajı)', r.message);
+    if (r?.expoHttpError) log.warn('notificationService', 'Expo Push API HTTP hatası', r.expoHttpError);
+    if (r?.pushTicketErrors?.length) log.warn('notificationService', 'Expo push ticket hataları', r.pushTicketErrors);
+    if (r?.sent === 0 && (r?.failed ?? 0) > 0) {
+      log.warn('notificationService', 'push hiç iletilmedi (ticket/api)', { sent: r.sent, failed: r.failed });
+    }
     if (r?.sent != null) log.info('notificationService', 'push gönderildi', { sent: r.sent, failed: r.failed ?? 0 });
   } catch (e) {
     log.warn('notificationService', 'sendExpoPush exception', e);
@@ -233,7 +250,10 @@ export async function notifyConversationRecipients(params: {
       log.warn('notificationService', 'notifyConversationRecipients', error);
       return { error: error.message };
     }
-    const r = result as { sent?: number; failed?: number } | null;
+    const r = result as ExpoPushFnResult | null;
+    if (r?.message) log.warn('notificationService', 'mesaj push (sunucu)', r.message);
+    if (r?.expoHttpError) log.warn('notificationService', 'mesaj push Expo HTTP', r.expoHttpError);
+    if (r?.pushTicketErrors?.length) log.warn('notificationService', 'mesaj push ticket', r.pushTicketErrors);
     if (r?.sent != null) log.info('notificationService', 'mesaj push', { sent: r.sent, failed: r.failed ?? 0 });
     return { sent: r?.sent, failed: r?.failed };
   } catch (e) {
@@ -258,7 +278,10 @@ export async function notifyAdmins(params: {
       log.warn('notificationService', 'notifyAdmins', error);
       return { error: error.message };
     }
-    const r = result as { sent?: number; failed?: number } | null;
+    const r = result as ExpoPushFnResult | null;
+    if (r?.message) log.warn('notificationService', 'admin push (sunucu)', r.message);
+    if (r?.expoHttpError) log.warn('notificationService', 'admin push Expo HTTP', r.expoHttpError);
+    if (r?.pushTicketErrors?.length) log.warn('notificationService', 'admin push ticket', r.pushTicketErrors);
     if (r?.sent != null) log.info('notificationService', 'admin push', { sent: r.sent, failed: r.failed ?? 0 });
     return { sent: r?.sent, failed: r?.failed };
   } catch (e) {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Switch,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { supabase, supabaseUrl, supabaseAnonKey } from '@/lib/supabase';
@@ -45,7 +46,17 @@ const APP_PERMISSIONS = [
   { key: 'gorev_ata', label: 'Görev atayabilir' },
   { key: 'personel_ekle', label: 'Personel ekleyebilir (sadece yönetici)' },
   { key: 'raporlar', label: 'Raporları görebilir' },
+  { key: 'satis_komisyon', label: 'Satış / komisyon modülüne erişebilir' },
   { key: 'tum_sozlesmeler', label: 'Tüm sözleşmeleri görüntüleyebilir' },
+];
+
+const CONTRACT_TYPES: { value: string; label: string }[] = [
+  { value: '', label: 'Seçilmedi' },
+  { value: 'full_time', label: 'Belirsiz süreli' },
+  { value: 'fixed_term', label: 'Belirli süreli' },
+  { value: 'seasonal', label: 'Sezonluk' },
+  { value: 'intern', label: 'Stajyer' },
+  { value: 'other', label: 'Diğer' },
 ];
 
 const DAYS = [
@@ -58,6 +69,8 @@ const DAYS = [
   { value: 7, label: 'Paz' },
 ];
 
+type OrgRow = { id: string; name: string; slug: string; kind: string };
+
 function randomPassword(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$%';
   let s = '';
@@ -68,6 +81,8 @@ function randomPassword(): string {
 export default function AddStaffScreen() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const [organizations, setOrganizations] = useState<OrgRow[]>([]);
+  const [organizationId, setOrganizationId] = useState<string | null>(null);
   const [full_name, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -88,12 +103,36 @@ export default function AddStaffScreen() {
     mesajlasma: true,
     video_paylasim: true,
     ekip_sohbet: true,
-    gorev_ata: true,
+    gorev_ata: false,
     personel_ekle: false,
     raporlar: false,
+    satis_komisyon: false,
     tum_sozlesmeler: false,
   });
   const [notes, setNotes] = useState('');
+  const [contract_type, setContractType] = useState('');
+  const [termination_date, setTerminationDate] = useState('');
+  const [internal_extension, setInternalExtension] = useState('');
+  const [certifications_summary, setCertificationsSummary] = useState('');
+  const [kvkk_consent_at, setKvkkConsentAt] = useState('');
+  const [drives_vehicle, setDrivesVehicle] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    supabase
+      .from('organizations')
+      .select('id, name, slug, kind')
+      .order('name')
+      .then(({ data }) => {
+        if (cancelled) return;
+        const rows = (data as OrgRow[]) ?? [];
+        setOrganizations(rows);
+        if (rows.length) setOrganizationId((prev) => prev ?? rows[0].id);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const toggleDay = (d: number) => {
     setWorkDays((prev) =>
@@ -117,6 +156,10 @@ export default function AddStaffScreen() {
     const role = department || 'receptionist';
     if (!ROLES.some((r) => r.value === role)) {
       Alert.alert('Hata', 'Geçerli bir departman seçin.');
+      return;
+    }
+    if (!organizationId) {
+      Alert.alert('Hata', 'İşletme seçin (otel veya tur şirketi).');
       return;
     }
     setLoading(true);
@@ -161,6 +204,13 @@ export default function AddStaffScreen() {
           work_days,
           shift_type: shift_type || null,
           notes: notes.trim() || null,
+          organization_id: organizationId,
+          contract_type: contract_type.trim() || null,
+          termination_date: termination_date.trim() || null,
+          internal_extension: internal_extension.trim() || null,
+          certifications_summary: certifications_summary.trim() || null,
+          kvkk_consent_at: kvkk_consent_at.trim() || null,
+          drives_vehicle,
         }),
       });
       const data = (await res.json().catch(() => ({}))) as { error?: string; email?: string };
@@ -250,6 +300,20 @@ export default function AddStaffScreen() {
         placeholderTextColor="#9ca3af"
       />
 
+      <Text style={styles.sectionTitle}>🏢 İşletme</Text>
+      <Text style={styles.label}>Bu personel hangi otel / ofis için? *</Text>
+      <View style={styles.chips}>
+        {organizations.map((o) => (
+          <TouchableOpacity
+            key={o.id}
+            style={[styles.chip, organizationId === o.id && styles.chipActive]}
+            onPress={() => setOrganizationId(o.id)}
+          >
+            <Text style={[styles.chipText, organizationId === o.id && styles.chipTextActive]}>{o.name}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
       <Text style={styles.sectionTitle}>🏢 Çalışan bilgileri</Text>
       <Text style={styles.label}>Departman</Text>
       <View style={styles.chips}>
@@ -306,6 +370,59 @@ export default function AddStaffScreen() {
         placeholder="1234567890"
         placeholderTextColor="#9ca3af"
       />
+
+      <Text style={styles.sectionTitle}>📋 Ek seçenekler (İK)</Text>
+      <Text style={styles.label}>Sözleşme tipi</Text>
+      <View style={styles.chips}>
+        {CONTRACT_TYPES.map((c) => (
+          <TouchableOpacity
+            key={c.value || 'none'}
+            style={[styles.chip, contract_type === c.value && styles.chipActive]}
+            onPress={() => setContractType(c.value)}
+          >
+            <Text style={[styles.chipText, contract_type === c.value && styles.chipTextActive]} numberOfLines={2}>
+              {c.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+      <Text style={styles.label}>İşten çıkış tarihi (varsa)</Text>
+      <TextInput
+        style={styles.input}
+        value={termination_date}
+        onChangeText={setTerminationDate}
+        placeholder="YYYY-MM-DD"
+        placeholderTextColor="#9ca3af"
+      />
+      <Text style={styles.label}>Dahili hat</Text>
+      <TextInput
+        style={styles.input}
+        value={internal_extension}
+        onChangeText={setInternalExtension}
+        placeholder="Örn: 204"
+        placeholderTextColor="#9ca3af"
+      />
+      <Text style={styles.label}>Sertifikalar / geçerlilik (serbest metin)</Text>
+      <TextInput
+        style={[styles.input, styles.textArea]}
+        value={certifications_summary}
+        onChangeText={setCertificationsSummary}
+        placeholder={'İlk yardım — 2026-12-01\nHijyen — 2025-06-15'}
+        placeholderTextColor="#9ca3af"
+        multiline
+      />
+      <Text style={styles.label}>KVKK onay tarihi</Text>
+      <TextInput
+        style={styles.input}
+        value={kvkk_consent_at}
+        onChangeText={setKvkkConsentAt}
+        placeholder="YYYY-MM-DD"
+        placeholderTextColor="#9ca3af"
+      />
+      <View style={styles.switchRow}>
+        <Text style={styles.label}>Ehliyet / araç kullanabilir</Text>
+        <Switch value={drives_vehicle} onValueChange={setDrivesVehicle} trackColor={{ false: '#cbd5e0', true: '#ed8936' }} thumbColor="#fff" />
+      </View>
 
       <Text style={styles.sectionTitle}>⏰ Çalışma</Text>
       <Text style={styles.label}>Vardiya</Text>
@@ -405,6 +522,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   textArea: { minHeight: 80 },
+  switchRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
   row: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
   smallBtn: { paddingVertical: 6, paddingHorizontal: 12, backgroundColor: '#e2e8f0', borderRadius: 8 },
   smallBtnText: { fontSize: 13, fontWeight: '600', color: '#4a5568' },

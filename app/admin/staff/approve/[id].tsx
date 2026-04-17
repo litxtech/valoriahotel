@@ -10,9 +10,12 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Switch,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { supabase, supabaseUrl, supabaseAnonKey } from '@/lib/supabase';
+
+type OrgRow = { id: string; name: string; slug: string; kind: string };
 
 type Application = {
   id: string;
@@ -31,6 +34,15 @@ const DEPARTMENTS = [
   { value: 'security', label: 'Güvenlik' },
 ];
 
+const CONTRACT_TYPES: { value: string; label: string }[] = [
+  { value: '', label: 'Seçilmedi' },
+  { value: 'full_time', label: 'Belirsiz süreli' },
+  { value: 'fixed_term', label: 'Belirli süreli' },
+  { value: 'seasonal', label: 'Sezonluk' },
+  { value: 'intern', label: 'Stajyer' },
+  { value: 'other', label: 'Diğer' },
+];
+
 const ROLES = [
   { value: 'receptionist', label: 'Resepsiyonist' },
   { value: 'reception_chief', label: 'Resepsiyon Şefi' },
@@ -47,6 +59,7 @@ const APP_PERMISSIONS = [
   { key: 'gorev_ata', label: 'Görev atama' },
   { key: 'personel_ekle', label: 'Personel ekle' },
   { key: 'raporlar', label: 'Raporlar' },
+  { key: 'satis_komisyon', label: 'Satış / komisyon' },
   { key: 'tum_sozlesmeler', label: 'Tüm sözleşmeler' },
 ];
 
@@ -70,8 +83,34 @@ export default function ApproveStaffScreen() {
     gorev_ata: false,
     personel_ekle: false,
     raporlar: false,
+    satis_komisyon: false,
     tum_sozlesmeler: false,
   });
+  const [organizations, setOrganizations] = useState<OrgRow[]>([]);
+  const [organizationId, setOrganizationId] = useState<string | null>(null);
+  const [contract_type, setContractType] = useState('');
+  const [termination_date, setTerminationDate] = useState('');
+  const [internal_extension, setInternalExtension] = useState('');
+  const [certifications_summary, setCertificationsSummary] = useState('');
+  const [kvkk_consent_at, setKvkkConsentAt] = useState('');
+  const [drives_vehicle, setDrivesVehicle] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    supabase
+      .from('organizations')
+      .select('id, name, slug, kind')
+      .order('name')
+      .then(({ data }) => {
+        if (cancelled) return;
+        const rows = (data as OrgRow[]) ?? [];
+        setOrganizations(rows);
+        if (rows.length) setOrganizationId((prev) => prev ?? rows[0].id);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!id) return;
@@ -99,6 +138,10 @@ export default function ApproveStaffScreen() {
 
   const submit = async () => {
     if (!app) return;
+    if (!organizationId) {
+      Alert.alert('Hata', 'İşletme seçin (otel veya tur şirketi).');
+      return;
+    }
     setSaving(true);
     try {
       await supabase.auth.refreshSession();
@@ -131,6 +174,13 @@ export default function ApproveStaffScreen() {
           personnel_no: personnel_no.trim() || undefined,
           hire_date: hire_date || undefined,
           app_permissions,
+          organization_id: organizationId,
+          contract_type: contract_type.trim() || undefined,
+          termination_date: termination_date.trim() || undefined,
+          internal_extension: internal_extension.trim() || undefined,
+          certifications_summary: certifications_summary.trim() || undefined,
+          kvkk_consent_at: kvkk_consent_at.trim() || undefined,
+          drives_vehicle,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -171,6 +221,51 @@ export default function ApproveStaffScreen() {
       <TextInput style={styles.input} value={app.phone ?? ''} editable={false} />
 
       <Text style={styles.sectionTitle}>Atanacak bilgiler</Text>
+      <Text style={styles.label}>İşletme (otel / tur ofisi) *</Text>
+      <View style={styles.chips}>
+        {organizations.map((o) => (
+          <TouchableOpacity
+            key={o.id}
+            style={[styles.chip, organizationId === o.id && styles.chipActive]}
+            onPress={() => setOrganizationId(o.id)}
+          >
+            <Text style={[styles.chipText, organizationId === o.id && styles.chipTextActive]}>{o.name}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+      <Text style={styles.label}>Sözleşme tipi</Text>
+      <View style={styles.chips}>
+        {CONTRACT_TYPES.map((c) => (
+          <TouchableOpacity
+            key={c.value || 'none'}
+            style={[styles.chip, contract_type === c.value && styles.chipActive]}
+            onPress={() => setContractType(c.value)}
+          >
+            <Text style={[styles.chipText, contract_type === c.value && styles.chipTextActive]} numberOfLines={2}>
+              {c.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+      <Text style={styles.label}>İşten çıkış (varsa)</Text>
+      <TextInput style={styles.input} value={termination_date} onChangeText={setTerminationDate} placeholder="YYYY-MM-DD" placeholderTextColor="#9ca3af" />
+      <Text style={styles.label}>Dahili hat</Text>
+      <TextInput style={styles.input} value={internal_extension} onChangeText={setInternalExtension} placeholder="204" placeholderTextColor="#9ca3af" />
+      <Text style={styles.label}>Sertifikalar</Text>
+      <TextInput
+        style={[styles.input, styles.textArea]}
+        value={certifications_summary}
+        onChangeText={setCertificationsSummary}
+        placeholder={'Satır satır veya kısa not'}
+        placeholderTextColor="#9ca3af"
+        multiline
+      />
+      <Text style={styles.label}>KVKK onay tarihi</Text>
+      <TextInput style={styles.input} value={kvkk_consent_at} onChangeText={setKvkkConsentAt} placeholder="YYYY-MM-DD" placeholderTextColor="#9ca3af" />
+      <View style={styles.switchRow}>
+        <Text style={styles.label}>Araç kullanabilir</Text>
+        <Switch value={drives_vehicle} onValueChange={setDrivesVehicle} trackColor={{ false: '#cbd5e0', true: '#1a365d' }} thumbColor="#fff" />
+      </View>
       <Text style={styles.label}>Departman</Text>
       <View style={styles.chips}>
         {DEPARTMENTS.map((d) => (
@@ -272,6 +367,8 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginBottom: 16,
   },
+  textArea: { minHeight: 80, textAlignVertical: 'top' },
+  switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
   chip: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8, backgroundColor: '#e2e8f0' },
   chipActive: { backgroundColor: '#1a365d' },

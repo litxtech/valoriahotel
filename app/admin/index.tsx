@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -8,7 +8,6 @@ import {
   RefreshControl,
   useWindowDimensions,
   Platform,
-  Animated,
 } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -18,7 +17,7 @@ import { staffListConversations } from '@/lib/messagingApi';
 import { useAuthStore } from '@/stores/authStore';
 import { useAdminBadgeDismissedStore } from '@/stores/adminBadgeDismissedStore';
 import { adminTheme } from '@/constants/adminTheme';
-import { AdminButton, AdminCard } from '@/components/admin';
+import { AdminCard } from '@/components/admin';
 
 type Stats = {
   roomsTotal: number;
@@ -34,10 +33,8 @@ type Stats = {
   acceptancesUnassigned: number;
 };
 
-const COLS = 2;
-const GAP = 14;
+const GAP = 12;
 const H_PAD = 20;
-const SECTION_PAD = 20;
 
 type SectionItem = {
   href: string;
@@ -55,17 +52,19 @@ const SECTIONS: { title: string; subtitle?: string; items: SectionItem[] }[] = [
       { href: '/admin/rooms/new', icon: 'add-circle-outline', label: 'Yeni oda' },
       { href: '/admin/checkin', icon: 'calendar-outline', label: 'Check-in / Check-out' },
       { href: '/admin/housekeeping', icon: 'leaf-outline', label: 'Housekeeping' },
+      { href: '/admin/tasks', icon: 'clipboard-outline', label: 'Personel görevleri' },
       { href: '/admin/guests', icon: 'people-outline', label: 'Misafirler' },
       { href: '/admin/report', icon: 'document-text-outline', label: 'Günlük rapor' },
       { href: '/admin/stays', icon: 'bed-outline', label: 'Konaklama geçmişi' },
+      { href: '/admin/sales', icon: 'cash-outline', label: 'Satış & Komisyon' },
       { href: '/admin/hmb-reports', icon: 'document-attach-outline', label: 'HMB Raporu (Maliye)' },
     ],
   },
   {
     title: 'İletişim',
-    subtitle: 'Paylaşımlar ve duyurular',
+    subtitle: 'Topluluk içeriği ve duyurular',
     items: [
-      { href: '/admin/feed', icon: 'images-outline', label: 'Paylaşımlar' },
+      { href: '/admin/feed', icon: 'images-outline', label: 'Gönderiler' },
       { href: '/admin/notifications/bulk', icon: 'megaphone-outline', label: 'Toplu duyuru' },
       { href: '/admin/reports', icon: 'flag-outline', label: 'Şikayetler (paylaşım bildirimleri)', badge: 0 },
     ],
@@ -88,6 +87,7 @@ const SECTIONS: { title: string; subtitle?: string; items: SectionItem[] }[] = [
       { href: '/admin/access', icon: 'key-outline', label: 'Geçiş kontrolü' },
       { href: '/admin/cameras', icon: 'videocam-outline', label: 'Kamera yönetimi' },
       { href: '/admin/permissions', icon: 'shield-checkmark-outline', label: 'İzinler' },
+      { href: '/admin/kbs-settings', icon: 'scan-outline', label: 'KBS Ayarları (Admin)' },
     ],
   },
   {
@@ -98,6 +98,7 @@ const SECTIONS: { title: string; subtitle?: string; items: SectionItem[] }[] = [
       { href: '/admin/app-links', icon: 'link-outline', label: 'Uygulamalar & Web Siteleri' },
       { href: '/admin/settings/printer', icon: 'print-outline', label: 'Yazici ayarlari' },
       { href: '/admin/contracts', icon: 'document-outline', label: 'Sözleşmeler' },
+      { href: '/admin/contracts/contact-directory', icon: 'call-outline', label: 'İletişim rehberi' },
       { href: '/admin/contracts/all', icon: 'document-text-outline', label: 'Tüm Sözleşmelerim' },
       { href: '/admin/staff', icon: 'person-add-outline', label: 'Çalışan ekleme', badge: 0 },
       { href: '/admin/staff/list', icon: 'people-outline', label: 'Kullanıcılar listesi' },
@@ -105,37 +106,6 @@ const SECTIONS: { title: string; subtitle?: string; items: SectionItem[] }[] = [
     ],
   },
 ];
-
-function AnimatedTile({
-  children,
-  onPress,
-  style,
-}: {
-  children: React.ReactNode;
-  onPress: () => void;
-  style?: object;
-}) {
-  const scale = useRef(new Animated.Value(1)).current;
-  const handlePressIn = () => {
-    Animated.spring(scale, { toValue: 0.97, useNativeDriver: true, speed: 50, bounciness: 4 }).start();
-  };
-  const handlePressOut = () => {
-    Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 50, bounciness: 8 }).start();
-  };
-  return (
-    <Animated.View style={[style, { transform: [{ scale }] }]}>
-      <TouchableOpacity
-        onPress={onPress}
-        onPressIn={handlePressIn}
-        onPressOut={handlePressOut}
-        activeOpacity={1}
-        style={styles.tileInner}
-      >
-        {children}
-      </TouchableOpacity>
-    </Animated.View>
-  );
-}
 
 export default function AdminDashboard() {
   const router = useRouter();
@@ -219,8 +189,6 @@ export default function AdminDashboard() {
 
   const occupancyPct = stats.roomsTotal > 0 ? Math.round((stats.roomsOccupied / stats.roomsTotal) * 100) : 0;
   const contentWidth = width - H_PAD * 2;
-  const sectionInnerWidth = contentWidth - SECTION_PAD * 2;
-  const cardSize = (sectionInnerWidth - GAP) / COLS;
   const statCardSize = (contentWidth - GAP) / 2;
 
   const { getEffectiveBadge, setDismissed } = useAdminBadgeDismissedStore();
@@ -229,7 +197,7 @@ export default function AdminDashboard() {
     if (itemLabel.includes('Onay bekleyenler')) return 'stockPending';
     if (itemLabel.includes('Çalışan ekleme')) return 'staffPending';
     if (itemLabel.includes('Şikayetler')) return 'reportsPending';
-    if (itemLabel.includes('Sözleşmeler')) return 'acceptancesUnassigned';
+    if (itemLabel === 'Sözleşmeler') return 'acceptancesUnassigned';
     return null;
   };
 
@@ -311,38 +279,42 @@ export default function AdminDashboard() {
         </TouchableOpacity>
       </View>
 
-      {/* Bölümler — AdminCard + canlı kachelar */}
       {SECTIONS.map((section, sectionIdx) => (
         <View key={sectionIdx} style={styles.section}>
-          <AdminCard>
-            <View style={styles.sectionHead}>
+          <AdminCard padded={false} elevated>
+            <View style={styles.sectionHeadPadded}>
               <Text style={styles.sectionTitle}>{section.title}</Text>
               {section.subtitle ? (
                 <Text style={styles.sectionSubtitle}>{section.subtitle}</Text>
               ) : null}
             </View>
-            <View style={[styles.tileGrid, { width: sectionInnerWidth, gap: GAP }]}>
+            <View style={styles.menuList}>
               {section.items.map((item, idx) => {
                 const badge = getBadge(section.title, item.label) ?? item.badge;
                 const showBadge = badge != null && badge > 0;
+                const isLast = idx === section.items.length - 1;
                 return (
-                  <AnimatedTile
+                  <TouchableOpacity
                     key={idx}
-                    style={{ width: cardSize, minHeight: cardSize * 1.05 }}
+                    style={[styles.menuRow, !isLast && styles.menuRowBorder]}
                     onPress={() => handleTilePress(item, section.title)}
+                    activeOpacity={0.65}
                   >
-                    {showBadge && (
-                      <View style={styles.tileBadge}>
-                        <Text style={styles.tileBadgeText}>{badge > 99 ? '99+' : badge}</Text>
-                      </View>
-                    )}
-                    <View style={styles.tileIconWrap}>
-                      <Ionicons name={item.icon} size={28} color={adminTheme.colors.primary} />
+                    <View style={styles.menuIconWrap}>
+                      <Ionicons name={item.icon} size={22} color={adminTheme.colors.primaryMuted} />
                     </View>
-                    <Text style={styles.tileLabel} numberOfLines={2}>
+                    <Text style={styles.menuLabel} numberOfLines={2}>
                       {item.label}
                     </Text>
-                  </AnimatedTile>
+                    <View style={styles.menuRowRight}>
+                      {showBadge ? (
+                        <View style={styles.menuBadge}>
+                          <Text style={styles.menuBadgeText}>{badge > 99 ? '99+' : badge}</Text>
+                        </View>
+                      ) : null}
+                      <Ionicons name="chevron-forward" size={18} color={adminTheme.colors.textMuted} />
+                    </View>
+                  </TouchableOpacity>
                 );
               })}
             </View>
@@ -366,7 +338,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     marginTop: 4,
-    marginBottom: 22,
+    marginBottom: 18,
   },
   statCard: {
     backgroundColor: adminTheme.colors.surface,
@@ -429,82 +401,74 @@ const styles = StyleSheet.create({
   },
 
   section: {
-    marginBottom: 24,
-  },
-  sectionHead: {
     marginBottom: 16,
   },
-  sectionHeadRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  sectionLinkBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  sectionHeadPadded: {
+    paddingHorizontal: adminTheme.spacing.lg,
+    paddingTop: adminTheme.spacing.lg,
+    paddingBottom: adminTheme.spacing.sm,
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '700',
     color: adminTheme.colors.text,
+    letterSpacing: -0.2,
   },
   sectionSubtitle: {
-    fontSize: 14,
+    fontSize: 13,
     color: adminTheme.colors.textMuted,
     marginTop: 4,
-  },
-  sectionLink: {
-    fontSize: 14,
-    color: adminTheme.colors.accent,
-    fontWeight: '600',
-    marginRight: 4,
+    lineHeight: 18,
   },
 
-  tileGrid: {
+  menuList: {
+    paddingBottom: 4,
+  },
+  menuRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-  },
-  tileInner: {
-    flex: 1,
-    backgroundColor: adminTheme.colors.surfaceTertiary,
-    borderRadius: adminTheme.radius.md,
-    padding: 18,
     alignItems: 'center',
-    justifyContent: 'flex-start',
-    borderWidth: 1,
-    borderColor: adminTheme.colors.border,
+    paddingVertical: 13,
+    paddingHorizontal: adminTheme.spacing.lg,
+    minHeight: 52,
   },
-  tileIconWrap: {
-    width: 56,
-    height: 56,
-    borderRadius: 14,
+  menuRowBorder: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: adminTheme.colors.borderLight,
+  },
+  menuIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
     backgroundColor: adminTheme.colors.surfaceSecondary,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 12,
+    marginRight: 12,
   },
-  tileBadge: {
-    position: 'absolute',
-    top: 10,
-    right: 10,
+  menuLabel: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '600',
+    color: adminTheme.colors.text,
+    lineHeight: 21,
+    paddingRight: 8,
+  },
+  menuRowRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  menuBadge: {
     minWidth: 22,
     height: 22,
     borderRadius: 11,
     backgroundColor: adminTheme.colors.error,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 6,
+    paddingHorizontal: 7,
+    marginRight: 6,
   },
-  tileBadgeText: {
+  menuBadgeText: {
     fontSize: 11,
     fontWeight: '700',
     color: '#fff',
-  },
-  tileLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: adminTheme.colors.text,
-    textAlign: 'center',
-    lineHeight: 20,
   },
 });

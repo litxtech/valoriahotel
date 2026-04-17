@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabase';
 import { log } from '@/lib/logger';
 import { updateGuestLoginInfo } from '@/lib/updateGuestLoginInfo';
+import { isOpaqueGuestDisplayString } from '@/lib/guestDisplayName';
 import type { User } from '@supabase/supabase-js';
 
 /**
@@ -11,9 +12,15 @@ export function getGuestFullNameFromUser(user: User | null | undefined): string 
   if (!user) return undefined;
   const meta = user.user_metadata ?? {};
   const full = (meta.full_name ?? meta.name ?? '') as string;
-  if (full && String(full).trim()) return String(full).trim();
+  if (full && String(full).trim()) {
+    const t = String(full).trim();
+    if (!isOpaqueGuestDisplayString(t)) return t;
+  }
   const email = (user.email ?? meta.email ?? '') as string;
-  if (email && String(email).trim()) return String(email).trim().split('@')[0] || undefined;
+  if (email && String(email).trim()) {
+    const local = String(email).trim().split('@')[0] || '';
+    if (local && !isOpaqueGuestDisplayString(local)) return local;
+  }
   return undefined;
 }
 

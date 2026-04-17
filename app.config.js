@@ -2,10 +2,15 @@ const { withBuildProperties } = require('expo-build-properties');
 
 const devClientScheme = 'exp+valoria-hotel';
 
+/** EAS Build: preview/production → Apple production APNs; development client → sandbox */
+const easProfile = process.env.EAS_BUILD_PROFILE;
+const expoPushIosMode =
+  easProfile === 'production' || easProfile === 'preview' ? 'production' : 'development';
+
 const baseConfig = {
   name: 'Valoria',
   slug: 'valoria-hotel',
-  version: '2.2.4',
+  version: '2.2.5',
   orientation: 'portrait',
   icon: './assets/icon.png',
   scheme: 'valoria',
@@ -19,7 +24,7 @@ const baseConfig = {
   ios: {
     supportsTablet: false,
     bundleIdentifier: 'com.valoria.hotel',
-    buildNumber: '11',
+    buildNumber: '12',
     newArchEnabled: false,
     infoPlist: {
       NSCameraUsageDescription: 'Sözleşme onayı için QR kod okutmanız gerekiyor.',
@@ -31,8 +36,8 @@ const baseConfig = {
     },
   },
   android: {
-    versionCode: 13,
-    softwareKeyboardLayoutMode: 'pan',
+    versionCode: 14,
+    softwareKeyboardLayoutMode: 'resize',
     googleServicesFile: './google-services.json',
     adaptiveIcon: {
       foregroundImage: './assets/adaptive-icon.png',
@@ -86,6 +91,8 @@ const baseConfig = {
         androidCollapsedTitle: 'Valoria',
         defaultChannelId: 'valoria_urgent',
         defaultChannel: 'valoria_urgent',
+        mode: expoPushIosMode,
+        enableBackgroundRemoteNotifications: true,
       },
     ],
     'expo-font',
@@ -100,6 +107,14 @@ const baseConfig = {
   experiments: {
     typedRoutes: true,
   },
+  /** Expo Push: sistem tepsi / ön plan davranışı (ek olarak expo-notifications plugin ile uyumlu) */
+  notification: {
+    icon: './assets/icon.png',
+    color: '#1a365d',
+    androidMode: 'default',
+    androidCollapsedTitle: 'Valoria',
+    iosDisplayInForeground: true,
+  },
   extra: {
     router: { origin: 'https://valoriahotel-el4r.vercel.app' },
     eas: { projectId: 'b6913ae8-bafd-4899-96bc-ae995a4bcec1' },
@@ -113,6 +128,8 @@ const expoWithBuild = withBuildProperties(
   {
     android: {
       kotlinVersion: '2.0.21',
+      /** react-native-vlc-media-player requires minSdk 26+ */
+      minSdkVersion: 26,
     },
   }
 );

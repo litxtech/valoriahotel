@@ -18,11 +18,14 @@ import { useAuthStore } from '@/stores/authStore';
 import { supabase } from '@/lib/supabase';
 import { uriToArrayBuffer } from '@/lib/uploadMedia';
 import { getOrCreateGuestForCaller, getOrCreateGuestForCurrentSession } from '@/lib/getOrCreateGuestForCaller';
+import { guestDisplayName } from '@/lib/guestDisplayName';
 import { ensureCameraPermission } from '@/lib/cameraPermission';
 import { ensureMediaLibraryPermission } from '@/lib/mediaLibraryPermission';
 import { theme } from '@/constants/theme';
 import { CachedImage } from '@/components/CachedImage';
 import { POST_TAGS, type PostTagValue } from '@/lib/feedPostTags';
+import { notifyGuestsOfNewFeedPost, notifyStaffOfNewFeedPost } from '@/lib/notifyNewFeedPost';
+import { log } from '@/lib/logger';
 
 const BUCKET = 'feed-media';
 
@@ -211,11 +214,34 @@ export default function CustomerNewFeedPostScreen() {
           /* reverse geocode optional */
         }
       }
-      const { error: insertErr } = await supabase.from('feed_posts').insert(insertPayload);
-      if (insertErr) {
+      const { data: insertedPost, error: insertErr } = await supabase
+        .from('feed_posts')
+        .insert(insertPayload)
+        .select('id')
+        .single();
+      if (insertErr || !insertedPost?.id) {
         setUploading(false);
-        Alert.alert('Hata', insertErr.message);
+        Alert.alert('Hata', insertErr?.message ?? 'Paylaşım kaydedilemedi.');
         return;
+      }
+      const titleTrim = (title ?? '').trim();
+      const titlePreview =
+        titleTrim.slice(0, 120) + (titleTrim.length > 120 ? '…' : '') || null;
+      try {
+        const { data: guestRow } = await supabase
+          .from('guests')
+          .select('full_name')
+          .eq('id', guestId)
+          .maybeSingle();
+        const authorName = guestDisplayName((guestRow as { full_name?: string | null } | null)?.full_name, 'Misafir');
+        await notifyStaffOfNewFeedPost({
+          postId: insertedPost.id,
+          authorDisplayName: authorName,
+          titlePreview,
+        });
+        await notifyGuestsOfNewFeedPost(insertedPost.id);
+      } catch (e) {
+        log.warn('customer/feed/new', 'notifyStaffOfNewFeedPost', e);
       }
       router.back();
     } catch (e) {

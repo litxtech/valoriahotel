@@ -16,7 +16,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
 import { Platform } from 'react-native';
 import { adminTheme } from '@/constants/adminTheme';
-import { shareContractPdf, buildContractHtml, openContractPrintWindow, type GuestForPdf } from '@/lib/contractPdf';
+import {
+  shareContractPdf,
+  buildContractHtml,
+  fetchContractPdfAppearance,
+  openContractPrintWindow,
+  type GuestForPdf,
+} from '@/lib/contractPdf';
 
 type StaffRow = { id: string; full_name: string | null; department: string | null };
 
@@ -200,9 +206,9 @@ export default function ContractAcceptances() {
     }
     setDetailLoading(true);
     try {
-      const guest = await loadGuestForPdf(item.guest_id);
+      const [guest, appearance] = await Promise.all([loadGuestForPdf(item.guest_id), fetchContractPdfAppearance()]);
       setDetailGuest(guest ?? null);
-      if (guest) setPreviewHtml(buildContractHtml(guest));
+      if (guest) setPreviewHtml(buildContractHtml(guest, appearance));
     } finally {
       setDetailLoading(false);
     }
@@ -210,7 +216,7 @@ export default function ContractAcceptances() {
 
   const openPreviewWindow = () => {
     if (Platform.OS === 'web') {
-      if (detailGuest) openContractPrintWindow(detailGuest);
+      if (detailGuest) void openContractPrintWindow(detailGuest);
       else if (previewHtml && typeof window !== 'undefined') {
         const w = window.open('', '_blank', 'noopener');
         if (w) {
@@ -237,6 +243,15 @@ export default function ContractAcceptances() {
           <Text style={styles.errorBannerSub}>Admin yetkisi ve RLS (contract_acceptances) kontrol edin.</Text>
         </View>
       ) : null}
+      <TouchableOpacity
+        style={styles.contactHubBtn}
+        onPress={() => router.push('/admin/contracts/contact-directory')}
+        activeOpacity={0.85}
+      >
+        <Ionicons name="call-outline" size={18} color="#fff" />
+        <Text style={styles.contactHubBtnText}>Telefon / WhatsApp / e-posta rehberi</Text>
+        <Ionicons name="chevron-forward" size={18} color="#fff" />
+      </TouchableOpacity>
       <Text style={styles.hint}>
         Sözleşme onayı yapan misafirler (önizlemede imzalayan ismi). Çalışan atayın; yetkili çalışan sadece kendine atanan onayları personel uygulamasında görür ve oda atar. Sözleşmeyi PDF olarak indirebilirsiniz.
       </Text>
@@ -395,6 +410,20 @@ export default function ContractAcceptances() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f7fafc' },
+  contactHubBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 4,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: '#0d9488',
+  },
+  contactHubBtnText: { color: '#fff', fontWeight: '700', fontSize: 14, flex: 1 },
   hint: {
     padding: 12,
     paddingHorizontal: 16,

@@ -2,15 +2,11 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
-  Image,
   ScrollView,
   StyleSheet,
   Switch,
   Alert,
-  KeyboardAvoidingView,
-  Platform,
   Modal,
   Pressable,
   Dimensions,
@@ -32,15 +28,16 @@ import { CachedImage } from '@/components/CachedImage';
 import { AvatarWithBadge, StaffNameWithBadge } from '@/components/VerifiedBadge';
 import { formatDateShort } from '@/lib/date';
 import { notifyAdmins } from '@/lib/notificationService';
-import { staffSetConversationMuted } from '@/lib/messagingApi';
 import { ensureMediaLibraryPermission } from '@/lib/mediaLibraryPermission';
-import { listBlockedUsersForStaff, unblockUserForStaff, type BlockedUserItem } from '@/lib/userBlocks';
+import { listBlockedUsersForStaff } from '@/lib/userBlocks';
 import { SharedAppLinks } from '@/components/SharedAppLinks';
+import { StaffEvaluationProfileTeaser } from '@/components/StaffEvaluationHub';
+import { resolveStaffEvaluation } from '@/lib/staffEvaluation';
+import { loadStaffProfileSelf } from '@/lib/loadStaffProfileForViewer';
+import { canAccessReservationSales } from '@/lib/staffPermissions';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-const STAFF_COVER_BLOCK_HEIGHT = 260;
-const STAFF_AVATAR_SIZE_STYLE = 112;
-const HEADER_AVATAR_SIZE = 64;
+const STAFF_COVER_BLOCK_HEIGHT = 228;
 
 type StaffProfile = {
   id: string;
@@ -67,9 +64,13 @@ type StaffProfile = {
   verification_badge?: 'blue' | 'yellow' | null;
   shift?: { start_time: string; end_time: string } | null;
   app_permissions?: Record<string, boolean> | null;
+  evaluation_score?: number | null;
+  evaluation_discipline?: number | null;
+  evaluation_communication?: number | null;
+  evaluation_speed?: number | null;
+  evaluation_responsibility?: number | null;
+  evaluation_insight?: string | null;
 };
-
-type ReviewRow = { id: string; rating: number; comment: string | null; created_at: string };
 
 type SalaryPaymentRow = {
   id: string;
@@ -98,14 +99,33 @@ const LANGUAGE_FLAGS: Record<string, string> = {
   es: '🇪🇸',
 };
 
-const actionButtons = (t: (k: string) => string) => [
-  { key: 'sohbet', label: t('chat'), icon: 'chatbubbles' as const, route: '/staff/messages' },
-  { key: 'gorevlerim', label: t('tasks'), icon: 'checkbox' as const, route: '/staff/tasks' },
-  { key: 'paylasim', label: t('share'), icon: 'share-social' as const, route: '/staff/feed/new' },
-  { key: 'stok', label: t('stockTab'), icon: 'cube' as const, route: '/staff/stock' },
-  { key: 'stoklarim', label: t('myStocks'), icon: 'list' as const, route: '/staff/stock/my-movements' },
-  { key: 'harcamalar', label: t('expenses'), icon: 'wallet-outline' as const, route: '/staff/expenses' },
-];
+type ActionBtn = { key: string; label: string; icon: keyof typeof Ionicons.glyphMap; route: string };
+
+const actionButtons = (t: (k: string) => string, authStaff: { role?: string; app_permissions?: Record<string, boolean> | null } | null): ActionBtn[] => {
+  const base: ActionBtn[] = [
+    { key: 'gorevlerim', label: t('tasks'), icon: 'checkbox', route: '/staff/tasks' },
+    { key: 'stok', label: t('stockTab'), icon: 'cube', route: '/staff/stock' },
+    { key: 'stoklarim', label: t('myStocks'), icon: 'list', route: '/staff/stock/my-movements' },
+    { key: 'harcamalar', label: t('expenses'), icon: 'wallet-outline', route: '/staff/expenses' },
+  ];
+  if (canAccessReservationSales(authStaff)) {
+    base.splice(1, 0, {
+      key: 'satis_komisyon',
+      label: 'Satış & Komisyon',
+      icon: 'cash-outline',
+      route: '/staff/sales',
+    });
+  }
+  if (authStaff?.app_permissions?.gorev_ata && authStaff.role !== 'admin') {
+    base.splice(1, 0, {
+      key: 'gorev_ata_panel',
+      label: t('taskAssignmentPanel'),
+      icon: 'clipboard',
+      route: '/admin/tasks',
+    });
+  }
+  return base;
+};
 
 export default function StaffProfileScreen() {
   const router = useRouter();
@@ -113,7 +133,6 @@ export default function StaffProfileScreen() {
   const { t, i18n } = useTranslation();
   const { staff: authStaff, signOut } = useAuthStore();
   const [profile, setProfile] = useState<StaffProfile | null>(null);
-  const [reviews, setReviews] = useState<ReviewRow[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadingCover, setUploadingCover] = useState(false);
   const [imageViewVisible, setImageViewVisible] = useState(false);
@@ -121,16 +140,12 @@ export default function StaffProfileScreen() {
   const [salaryPayments, setSalaryPayments] = useState<SalaryPaymentRow[]>([]);
   const [salaryActingId, setSalaryActingId] = useState<string | null>(null);
   const [salaryHistoryOpen, setSalaryHistoryOpen] = useState(false);
-  const [allStaffConvId, setAllStaffConvId] = useState<string | null>(null);
-  const [muteAllStaffMessages, setMuteAllStaffMessages] = useState(false);
-  const [muteFeedNotifications, setMuteFeedNotifications] = useState(false);
-  const [blockedUsers, setBlockedUsers] = useState<BlockedUserItem[]>([]);
-  const [unblockingId, setUnblockingId] = useState<string | null>(null);
+  const [blockedCount, setBlockedCount] = useState(0);
   const [languageModalVisible, setLanguageModalVisible] = useState(false);
+  const [openTaskCount, setOpenTaskCount] = useState(0);
   const profileRef = useRef<StaffProfile | null>(null);
 
   const handleLanguageSelect = async (code: LangCode) => {
-    const prevLang = (i18n.language || '').split('-')[0];
     i18n.changeLanguage(code);
     AsyncStorage.setItem(LANG_STORAGE_KEY, code);
     setLanguageModalVisible(false);
@@ -144,26 +159,15 @@ export default function StaffProfileScreen() {
   useEffect(() => {
     if (!authStaff?.id) return;
     const load = async () => {
-      const { data } = await supabase
-        .from('staff')
-        .select(
-          'id, full_name, department, profile_image, cover_image, bio, specialties, languages, is_online, total_reviews, average_rating, position, hire_date, office_location, achievements, phone, email, whatsapp, show_phone_to_guest, show_email_to_guest, show_whatsapp_to_guest, verification_badge, shift_id, app_permissions'
-        )
-        .eq('id', authStaff.id)
-        .single();
-      if (data) {
+      const res = await loadStaffProfileSelf(authStaff.id);
+      if (res.data) {
+        const data = res.data;
         setProfile({ ...data, shift: null } as StaffProfile);
         if (data.shift_id) {
           const { data: shift } = await supabase.from('shifts').select('start_time, end_time').eq('id', data.shift_id).single();
           setProfile((p) => (p ? { ...p, shift } : null));
         }
       }
-      const { data: r } = await supabase
-        .from('staff_reviews')
-        .select('id, rating, comment, created_at')
-        .eq('staff_id', authStaff.id)
-        .order('created_at', { ascending: false });
-      setReviews((r ?? []) as ReviewRow[]);
       const { data: sal } = await supabase
         .from('salary_payments')
         .select('id, period_month, period_year, amount, payment_date, status, staff_approved_at, staff_rejected_at, rejection_reason')
@@ -171,42 +175,8 @@ export default function StaffProfileScreen() {
         .order('period_year', { ascending: false })
         .order('period_month', { ascending: false });
       setSalaryPayments((sal ?? []) as SalaryPaymentRow[]);
-      // Tüm Çalışanlar grubu sessiz durumu
-      const { data: allStaffConv } = await supabase
-        .from('conversations')
-        .select('id')
-        .eq('type', 'group')
-        .eq('name', 'Tüm Çalışanlar')
-        .maybeSingle();
-      if (allStaffConv?.id) {
-        setAllStaffConvId(allStaffConv.id);
-        const { data: part } = await supabase
-          .from('conversation_participants')
-          .select('is_muted')
-          .eq('conversation_id', allStaffConv.id)
-          .eq('participant_id', authStaff.id)
-          .in('participant_type', ['staff', 'admin'])
-          .maybeSingle();
-        setMuteAllStaffMessages(!!(part as { is_muted?: boolean } | null)?.is_muted);
-      }
-      // Paylaşım bildirimleri sessiz tercihi
-      const { data: feedPref } = await supabase
-        .from('notification_preferences')
-        .select('enabled')
-        .eq('staff_id', authStaff.id)
-        .eq('pref_key', 'mute_feed_notifications')
-        .maybeSingle();
-      setMuteFeedNotifications(!!(feedPref as { enabled?: boolean } | null)?.enabled);
-      const blocked = await listBlockedUsersForStaff(authStaff.id);
-      setBlockedUsers(blocked);
     };
     load();
-  }, [authStaff?.id]);
-
-  const loadBlockedUsers = useCallback(async () => {
-    if (!authStaff?.id) return;
-    const blocked = await listBlockedUsersForStaff(authStaff.id);
-    setBlockedUsers(blocked);
   }, [authStaff?.id]);
 
   const pickImage = async () => {
@@ -303,41 +273,6 @@ export default function StaffProfileScreen() {
     setProfile((p) => (p ? { ...p, is_online: value } : null));
   };
 
-  const saveField = async (
-    field: 'bio' | 'specialties' | 'languages' | 'office_location' | 'achievements' | 'phone' | 'email' | 'whatsapp',
-    value: string | string[] | null
-  ) => {
-    if (!profile) return;
-    let payload: Record<string, unknown>;
-    if (field === 'specialties' || field === 'languages') {
-      payload = { [field]: Array.isArray(value) ? value : value ? (value as string).split(',').map((s) => s.trim()).filter(Boolean) : [] };
-    } else if (field === 'achievements') {
-      payload = { [field]: Array.isArray(value) ? value : value ? (value as string).split(',').map((s) => s.trim()).filter(Boolean) : [] };
-    } else if (field === 'email') {
-      const trimmed = (value ?? '').toString().trim();
-      // staff.email NOT NULL: boş bırakılırsa mevcut değeri koru
-      payload = { email: trimmed || profile.email || '' };
-    } else {
-      payload = { [field]: value ?? null };
-    }
-    const { error } = await supabase.from('staff').update(payload).eq('id', profile.id);
-    if (error) {
-      Alert.alert(t('recordError'), `${field} kaydedilemedi: ${error.message}`);
-      return;
-    }
-    setProfile((p) => (p ? { ...p, ...payload } : null));
-  };
-
-  const saveVisibility = async (field: 'show_phone_to_guest' | 'show_email_to_guest' | 'show_whatsapp_to_guest', value: boolean) => {
-    if (!profile) return;
-    const { error } = await supabase.from('staff').update({ [field]: value }).eq('id', profile.id);
-    if (error) {
-      Alert.alert(t('recordError'), `Görünürlük ayarı kaydedilemedi: ${error.message}`);
-      return;
-    }
-    setProfile((p) => (p ? { ...p, [field]: value } : null));
-  };
-
   const approveSalary = async (paymentId: string) => {
     setSalaryActingId(paymentId);
     const { error } = await supabase
@@ -421,12 +356,9 @@ export default function StaffProfileScreen() {
 
   const reloadProfile = useCallback(async () => {
     if (!authStaff?.id) return;
-    const { data } = await supabase
-      .from('staff')
-      .select('id, full_name, department, profile_image, cover_image, bio, specialties, languages, is_online, total_reviews, average_rating, position, hire_date, office_location, achievements, phone, email, whatsapp, show_phone_to_guest, show_email_to_guest, show_whatsapp_to_guest, verification_badge, shift_id')
-      .eq('id', authStaff.id)
-      .single();
-    if (data) {
+    const res = await loadStaffProfileSelf(authStaff.id);
+    if (res.data) {
+      const data = res.data;
       setProfile({ ...data, shift: null } as StaffProfile);
       if (data.shift_id) {
         const { data: shift } = await supabase.from('shifts').select('start_time, end_time').eq('id', data.shift_id).single();
@@ -435,51 +367,32 @@ export default function StaffProfileScreen() {
     }
   }, [authStaff?.id]);
 
-  // Sayfadan çıkarken iletişim bilgilerini kaydet; odaklanınca profili yenile (edit sayfasından dönünce güncel isim görünsün)
+  const refreshOpenTaskCount = useCallback(async () => {
+    if (!authStaff?.id) {
+      setOpenTaskCount(0);
+      return;
+    }
+    try {
+      const { count, error } = await supabase
+        .from('staff_assignments')
+        .select('id', { count: 'exact', head: true })
+        .eq('assigned_staff_id', authStaff.id)
+        .in('status', ['pending', 'in_progress']);
+      if (!error) setOpenTaskCount(count ?? 0);
+    } catch {
+      setOpenTaskCount(0);
+    }
+  }, [authStaff?.id]);
+
   useFocusEffect(
     useCallback(() => {
-      loadBlockedUsers();
       reloadProfile();
-      return () => {
-        const p = profileRef.current;
-        if (!p?.id) return;
-        const emailVal = p.email?.trim();
-        supabase
-          .from('staff')
-          .update({
-            phone: p.phone?.trim() || null,
-            email: emailVal || p.email || '',
-            whatsapp: p.whatsapp?.trim() || null,
-          })
-          .eq('id', p.id);
-      };
-    }, [loadBlockedUsers, reloadProfile])
+      refreshOpenTaskCount();
+      if (authStaff?.id) {
+        listBlockedUsersForStaff(authStaff.id).then((rows) => setBlockedCount(rows.length));
+      }
+    }, [reloadProfile, refreshOpenTaskCount, authStaff?.id])
   );
-
-  const handleUnblock = (item: BlockedUserItem) => {
-    if (!authStaff?.id) return;
-    Alert.alert(t('unblockTitle'), t('unblockConfirm', { name: item.name }), [
-      { text: t('cancelAction'), style: 'cancel' },
-      {
-        text: t('removeBlock'),
-        style: 'destructive',
-        onPress: async () => {
-          setUnblockingId(item.blockId);
-          const { error } = await unblockUserForStaff({
-            blockerStaffId: authStaff.id,
-            blockedType: item.blockedType,
-            blockedId: item.blockedId,
-          });
-          setUnblockingId(null);
-          if (error) {
-            Alert.alert(t('error'), error.message || 'Engel kaldırılamadı.');
-            return;
-          }
-          setBlockedUsers((prev) => prev.filter((x) => x.blockId !== item.blockId));
-        },
-      },
-    ]);
-  };
 
   if (!profile) {
     return (
@@ -490,9 +403,13 @@ export default function StaffProfileScreen() {
   const avatarUri = profile.profile_image || 'https://via.placeholder.com/120';
 
   return (
-    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={90}>
-      <ScrollView keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" showsVerticalScrollIndicator={false}>
-        {/* Kapak sabit yükseklikte kutu; profil resmi kapak alt kenarına sabit, hep aynı yerde. */}
+    <View style={styles.container}>
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 28 }}
+      >
         <View style={[styles.coverBlock, styles.coverBlockFixed]}>
           <View style={styles.coverImageClip}>
             <TouchableOpacity
@@ -530,29 +447,107 @@ export default function StaffProfileScreen() {
           )}
         </View>
 
-        <View style={styles.profileHeaderRow}>
-          <TouchableOpacity onPress={onAvatarPress} disabled={uploading} activeOpacity={0.9} style={styles.avatarTouchWrap}>
-            <AvatarWithBadge badge={profile.verification_badge ?? null} avatarSize={HEADER_AVATAR_SIZE} badgeSize={16} showBadge={false}>
-              <CachedImage uri={avatarUri} style={[styles.avatar, styles.avatarSmall]} contentFit="cover" />
-            </AvatarWithBadge>
-            {uploading && (
-              <View style={[styles.uploadOverlay, styles.uploadOverlaySmall]}>
-                <Text style={styles.uploadText}>{t('loading')}</Text>
-              </View>
-            )}
-            <TouchableOpacity style={[styles.editPhotoBtn, styles.editPhotoBtnSmall]} onPress={(e) => { e.stopPropagation(); pickImage(); }} disabled={uploading}>
-              <Ionicons name="camera" size={14} color={theme.colors.white} />
+        <View style={styles.heroOverlap}>
+          <View style={styles.heroCard}>
+            <TouchableOpacity onPress={onAvatarPress} disabled={uploading} activeOpacity={0.92} style={styles.heroAvatarWrap}>
+              <AvatarWithBadge badge={profile.verification_badge ?? null} avatarSize={88} badgeSize={18} showBadge={false}>
+                <CachedImage uri={avatarUri} style={styles.heroAvatarImg} contentFit="cover" />
+              </AvatarWithBadge>
+              {uploading ? (
+                <View style={styles.heroAvatarOverlay}>
+                  <ActivityIndicator color={theme.colors.white} size="small" />
+                </View>
+              ) : null}
+              <TouchableOpacity style={styles.heroAvatarCam} onPress={(e) => { e.stopPropagation(); pickImage(); }} disabled={uploading}>
+                <Ionicons name="camera" size={16} color={theme.colors.white} />
+              </TouchableOpacity>
             </TouchableOpacity>
-          </TouchableOpacity>
-          <StaffNameWithBadge name={profile.full_name || '—'} badge={profile.verification_badge ?? null} badgeSize={18} textStyle={styles.name} center />
+            <StaffNameWithBadge name={profile.full_name || '—'} badge={profile.verification_badge ?? null} badgeSize={20} textStyle={styles.heroName} center />
+            {authStaff?.organization?.name ? (
+              <Text style={styles.heroOrgTag} numberOfLines={1}>
+                {authStaff.organization.name}
+              </Text>
+            ) : null}
+            <Text style={styles.heroSubtitle} numberOfLines={2}>
+              {[profile.position?.trim(), profile.department?.trim()].filter(Boolean).join(' · ') || t('unspecified')}
+            </Text>
+            <TouchableOpacity style={styles.heroEditCta} onPress={() => router.push('/staff/profile/edit')} activeOpacity={0.88}>
+              <Ionicons name="create-outline" size={20} color={theme.colors.white} />
+              <Text style={styles.heroEditCtaText}>{t('editProfileInfo')}</Text>
+            </TouchableOpacity>
+            <Text style={styles.heroEditHint}>{t('editProfileHint')}</Text>
+          </View>
         </View>
 
         <View style={styles.body}>
-
-          {/* İş bilgileri – tek kart: Departman, İşe başlama, Konum, Durum */}
-          <View style={styles.sectionTitleWrap}>
-            <Text style={styles.sectionTitle}>📊 {t('jobInfo')}</Text>
+          <Text style={styles.pageSectionLabel}>{t('quickAccess')}</Text>
+          <View style={styles.menuCard}>
+            {actionButtons(t, authStaff).map((btn, i, arr) => (
+              <TouchableOpacity
+                key={btn.key}
+                style={[styles.menuRow, i === arr.length - 1 && styles.menuRowLast]}
+                onPress={() => router.push(btn.route as never)}
+                activeOpacity={0.75}
+              >
+                <View style={styles.menuIconCircle}>
+                  <Ionicons name={btn.icon} size={22} color={theme.colors.primary} />
+                </View>
+                <Text style={styles.menuRowTitle}>{btn.label}</Text>
+                {btn.key === 'gorevlerim' && openTaskCount > 0 ? (
+                  <View style={styles.menuBadge}>
+                    <Text style={styles.menuBadgeText}>{openTaskCount > 9 ? '9+' : openTaskCount}</Text>
+                  </View>
+                ) : null}
+                <Ionicons name="chevron-forward" size={20} color={theme.colors.textMuted} />
+              </TouchableOpacity>
+            ))}
           </View>
+
+          {authStaff?.role === 'admin' ? (
+            <>
+              <Text style={styles.pageSectionLabel}>{t('adminShortcuts')}</Text>
+              <View style={styles.menuCard}>
+                {(
+                  [
+                    { route: '/admin/expenses/all', icon: 'list-outline' as const, label: 'Tüm Harcamalar' },
+                    { route: '/admin/salary/all', icon: 'cash-outline' as const, label: 'Tüm Ödemeler' },
+                    { route: '/admin/contracts/all', icon: 'document-text-outline' as const, label: 'Tüm Sözleşmeler' },
+                    { route: '/admin/stock/all', icon: 'layers-outline' as const, label: 'Tüm Stoklar' },
+                  ] as const
+                ).map((item, i, arr) => (
+                  <TouchableOpacity
+                    key={item.route}
+                    style={[styles.menuRow, i === arr.length - 1 && styles.menuRowLast]}
+                    onPress={() => router.push(item.route as never)}
+                    activeOpacity={0.75}
+                  >
+                    <View style={styles.menuIconCircle}>
+                      <Ionicons name={item.icon} size={22} color={theme.colors.primary} />
+                    </View>
+                    <Text style={styles.menuRowTitle}>{item.label}</Text>
+                    <Ionicons name="chevron-forward" size={20} color={theme.colors.textMuted} />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </>
+          ) : null}
+
+          {profile?.app_permissions?.tum_sozlesmeler && authStaff?.role !== 'admin' ? (
+            <>
+              <Text style={styles.pageSectionLabel}>{t('contractsShortcut')}</Text>
+              <View style={styles.menuCard}>
+                <TouchableOpacity style={[styles.menuRow, styles.menuRowLast]} onPress={() => router.push('/staff/contracts/all')} activeOpacity={0.75}>
+                  <View style={styles.menuIconCircle}>
+                    <Ionicons name="document-text-outline" size={22} color={theme.colors.primary} />
+                  </View>
+                  <Text style={styles.menuRowTitle}>{t('contractsShortcut')}</Text>
+                  <Ionicons name="chevron-forward" size={20} color={theme.colors.textMuted} />
+                </TouchableOpacity>
+              </View>
+            </>
+          ) : null}
+
+          <Text style={styles.pageSectionLabel}>{t('jobInfo')}</Text>
           <View style={styles.jobInfoCard}>
             <View style={styles.jobInfoRow}>
               <Text style={styles.jobInfoItem}>📌 {profile.department?.trim() || t('unspecified')}</Text>
@@ -573,10 +568,25 @@ export default function StaffProfileScreen() {
             </View>
           </View>
 
-          {/* Maaş bilgileri */}
-          <View style={styles.sectionTitleWrap}>
-            <Text style={styles.sectionTitle}>💰 {t('salaryInfo')}</Text>
+          <View style={styles.evaluationTeaserWrap}>
+            <StaffEvaluationProfileTeaser
+              resolved={resolveStaffEvaluation({
+                id: profile.id,
+                evaluation_score: profile.evaluation_score,
+                evaluation_discipline: profile.evaluation_discipline,
+                evaluation_communication: profile.evaluation_communication,
+                evaluation_speed: profile.evaluation_speed,
+                evaluation_responsibility: profile.evaluation_responsibility,
+                evaluation_insight: profile.evaluation_insight,
+                average_rating: profile.average_rating,
+              })}
+              averageRating={profile.average_rating}
+              totalReviews={profile.total_reviews}
+              onPress={() => router.push('/staff/evaluation')}
+            />
           </View>
+
+          <Text style={styles.pageSectionLabel}>{t('salaryInfo')}</Text>
           <View style={styles.card}>
             {salaryPayments.length === 0 ? (
               <Text style={styles.salaryMuted}>{t('noSalaryRecords')}</Text>
@@ -644,173 +654,58 @@ export default function StaffProfileScreen() {
             </View>
           )}
 
-          {/* Bildirimler / Sessize al */}
-          <View style={styles.sectionTitleWrap}>
-            <Text style={styles.sectionTitle}>🔔 {t('notificationsSection')}</Text>
-          </View>
-          <View style={styles.card}>
-            <View style={styles.switchRow}>
-              <Text style={styles.switchLabel}>{t('muteAllStaffMessages')}</Text>
-              <Switch
-                value={muteAllStaffMessages}
-                onValueChange={async (v) => {
-                  if (!authStaff?.id || !allStaffConvId) return;
-                  const { error } = await staffSetConversationMuted(allStaffConvId, authStaff.id, v);
-                  if (error) Alert.alert('Hata', error);
-                  else setMuteAllStaffMessages(v);
-                }}
-                trackColor={{ false: theme.colors.borderLight, true: theme.colors.primary }}
-                thumbColor={theme.colors.surface}
-              />
-            </View>
-            <View style={[styles.switchRow, styles.switchRowLast]}>
-              <Text style={styles.switchLabel}>{t('muteFeedNotifications')}</Text>
-              <Switch
-                value={muteFeedNotifications}
-                onValueChange={async (v) => {
-                  if (!authStaff?.id) return;
-                  setMuteFeedNotifications(v);
-                  await supabase.from('notification_preferences').upsert(
-                    { staff_id: authStaff.id, pref_key: 'mute_feed_notifications', enabled: v, updated_at: new Date().toISOString() },
-                    { onConflict: 'staff_id,pref_key' }
-                  );
-                }}
-                trackColor={{ false: theme.colors.borderLight, true: theme.colors.primary }}
-                thumbColor={theme.colors.surface}
-              />
-            </View>
-          </View>
-
-          {/* Profil düzenleme */}
-          <View style={styles.sectionTitleWrap}>
-            <Text style={styles.sectionTitle}>{t('account')}</Text>
-          </View>
-          <TouchableOpacity style={styles.editProfileCard} onPress={() => router.push('/staff/profile/edit')} activeOpacity={0.7}>
-            <View style={styles.editProfileIconWrap}>
-              <Ionicons name="create-outline" size={22} color={theme.colors.primary} />
-            </View>
-            <View style={styles.editProfileTextWrap}>
-              <Text style={styles.editProfileLabel}>{t('editProfileInfo')}</Text>
-              <Text style={styles.editProfileHint}>{t('editProfileHint')}</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color={theme.colors.textMuted} style={styles.editProfileChevron} />
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.editProfileCard} onPress={() => setLanguageModalVisible(true)} activeOpacity={0.7}>
-            <View style={styles.editProfileIconWrap}>
-              <Ionicons name="language-outline" size={22} color={theme.colors.primary} />
-            </View>
-            <View style={styles.editProfileTextWrap}>
-              <Text style={styles.editProfileLabel}>{t('language')}</Text>
-              <Text style={styles.editProfileHint}>{LANGUAGES.find((l) => l.code === (i18n.language || '').split('-')[0])?.label ?? t('selectLanguage')}</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color={theme.colors.textMuted} style={styles.editProfileChevron} />
-          </TouchableOpacity>
-
-          {/* Hızlı erişim – modern kartlar */}
-          <View style={styles.actionsSection}>
-            <Text style={styles.sectionTitle}>{t('quickAccess')}</Text>
-            <View style={styles.actionsGrid}>
-              {actionButtons(t).map((btn) => (
-                <TouchableOpacity
-                  key={btn.key}
-                  style={styles.actionCard}
-                  onPress={() => router.push(btn.route as any)}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.actionIconWrap}>
-                    <Ionicons name={btn.icon} size={28} color={theme.colors.primary} />
-                  </View>
-                  <Text style={styles.actionLabel} numberOfLines={1}>{btn.label}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-
-          {/* Admin: Tüm Harcamalar, Tüm Ödemeler, Tüm Sözleşmeler – sadece admin rolünde görünür */}
-          {authStaff?.role === 'admin' && (
-            <View style={styles.actionsSection}>
-              <Text style={styles.sectionTitle}>Admin hızlı erişim</Text>
-              <View style={styles.actionsGrid}>
-                <TouchableOpacity
-                  style={styles.actionCard}
-                  onPress={() => router.push('/admin/expenses/all')}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.actionIconWrap}>
-                    <Ionicons name="list-outline" size={28} color={theme.colors.primary} />
-                  </View>
-                  <Text style={styles.actionLabel} numberOfLines={1}>Tüm Harcamalar</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.actionCard}
-                  onPress={() => router.push('/admin/salary/all')}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.actionIconWrap}>
-                    <Ionicons name="cash-outline" size={28} color={theme.colors.primary} />
-                  </View>
-                  <Text style={styles.actionLabel} numberOfLines={1}>Tüm Ödemeler</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.actionCard}
-                  onPress={() => router.push('/admin/contracts/all')}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.actionIconWrap}>
-                    <Ionicons name="document-text-outline" size={28} color={theme.colors.primary} />
-                  </View>
-                  <Text style={styles.actionLabel} numberOfLines={1}>Tüm Sözleşmeler</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.actionCard}
-                  onPress={() => router.push('/admin/stock/all')}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.actionIconWrap}>
-                    <Ionicons name="layers-outline" size={28} color={theme.colors.primary} />
-                  </View>
-                  <Text style={styles.actionLabel} numberOfLines={1}>Tüm Stoklar</Text>
-                </TouchableOpacity>
+          <Text style={styles.pageSectionLabel}>{t('account')}</Text>
+          <View style={styles.menuCard}>
+            <TouchableOpacity
+              style={styles.menuRow}
+              onPress={() => setLanguageModalVisible(true)}
+              activeOpacity={0.75}
+            >
+              <View style={styles.menuIconCircle}>
+                <Ionicons name="language-outline" size={22} color={theme.colors.primary} />
               </View>
-            </View>
-          )}
-
-          {/* Tüm sözleşmeler – tum_sozlesmeler yetkisi verilen çalışanlarda görünür (admin değilse) */}
-          {profile?.app_permissions?.tum_sozlesmeler && authStaff?.role !== 'admin' && (
-            <View style={styles.actionsSection}>
-              <Text style={styles.sectionTitle}>Sözleşmeler</Text>
-              <View style={styles.actionsGrid}>
-                <TouchableOpacity
-                  style={styles.actionCard}
-                  onPress={() => router.push('/staff/contracts/all')}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.actionIconWrap}>
-                    <Ionicons name="document-text-outline" size={28} color={theme.colors.primary} />
-                  </View>
-                  <Text style={styles.actionLabel} numberOfLines={1}>Tüm Sözleşmeler</Text>
-                </TouchableOpacity>
+              <View style={styles.menuRowTextCol}>
+                <Text style={styles.menuDetailTitle}>{t('language')}</Text>
+                <Text style={styles.menuDetailSub}>
+                  {LANGUAGES.find((l) => l.code === (i18n.language || '').split('-')[0])?.label ?? t('selectLanguage')}
+                </Text>
               </View>
-            </View>
-          )}
+              <Ionicons name="chevron-forward" size={20} color={theme.colors.textMuted} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.menuRow}
+              onPress={() => router.push('/staff/profile/notifications')}
+              activeOpacity={0.75}
+            >
+              <View style={styles.menuIconCircle}>
+                <Ionicons name="notifications-outline" size={22} color={theme.colors.primary} />
+              </View>
+              <View style={styles.menuRowTextCol}>
+                <Text style={styles.menuDetailTitle}>{t('notificationPrefsShort')}</Text>
+                <Text style={styles.menuDetailSub}>{t('notificationsSection')}</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color={theme.colors.textMuted} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.menuRow, styles.menuRowLast]}
+              onPress={() => router.push('/staff/profile/blocked-users')}
+              activeOpacity={0.75}
+            >
+              <View style={styles.menuIconCircle}>
+                <Ionicons name="ban-outline" size={22} color={theme.colors.primary} />
+              </View>
+              <View style={styles.menuRowTextCol}>
+                <Text style={styles.menuDetailTitle}>{t('blockedUsersTitle')}</Text>
+                <Text style={styles.menuDetailSub}>
+                  {blockedCount > 0 ? t('blockedUsersBadge', { count: blockedCount }) : t('openBlockedList')}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color={theme.colors.textMuted} />
+            </TouchableOpacity>
+          </View>
 
           <SharedAppLinks compact />
 
-          {/* Performans özeti */}
-          <View style={styles.sectionTitleWrap}>
-            <Text style={styles.sectionTitle}>📊 {t('performanceSummary')}</Text>
-          </View>
-          <View style={styles.stats}>
-            <View style={styles.stat}>
-              <Text style={styles.statValue}>{profile.total_reviews ?? 0}</Text>
-              <Text style={styles.statLabel}>{t('reviewCount')}</Text>
-            </View>
-            <View style={styles.stat}>
-              <Text style={styles.statValue}>{(profile.average_rating ?? 0).toFixed(1)}</Text>
-              <Text style={styles.statLabel}>{t('rating')}</Text>
-            </View>
-          </View>
           {profile.shift && (
             <View style={styles.shiftBox}>
               <Text style={styles.label}>{t('workHours')}</Text>
@@ -818,155 +713,27 @@ export default function StaffProfileScreen() {
             </View>
           )}
 
-          {/* Kişisel bilgiler + görünürlük */}
-          <View style={styles.sectionTitleWrap}>
-            <Text style={styles.sectionTitle}>📋 {t('personalInfo')}</Text>
-          </View>
-          <View style={styles.card}>
-            <Text style={styles.label}>{t('locationOffice')}</Text>
-            <TextInput
-              style={styles.input}
-              value={profile.office_location ?? ''}
-              onChangeText={(t) => setProfile((p) => (p ? { ...p, office_location: t || null } : null))}
-              onBlur={() => saveField('office_location', profile.office_location ?? '')}
-              placeholder="Örn: 2. Kat Ofisi"
-              placeholderTextColor={theme.colors.textMuted}
-            />
-            <Text style={styles.label}>Telefon</Text>
-            <TextInput
-              style={styles.input}
-              value={profile.phone ?? ''}
-              onChangeText={(t) => setProfile((p) => (p ? { ...p, phone: t || null } : null))}
-              onBlur={() => saveField('phone', profile.phone ?? '')}
-              placeholder="0555 123 45 67"
-              keyboardType="phone-pad"
-              placeholderTextColor={theme.colors.textMuted}
-            />
-            <View style={styles.switchRow}>
-              <Text style={styles.switchLabel}>{t('showPhoneToGuest')}</Text>
-              <Switch
-                value={profile.show_phone_to_guest !== false}
-                onValueChange={(v) => saveVisibility('show_phone_to_guest', v)}
-                trackColor={{ true: theme.colors.primary }}
-              />
-            </View>
-            <Text style={styles.label}>E-posta</Text>
-            <TextInput
-              style={styles.input}
-              value={profile.email ?? ''}
-              onChangeText={(t) => setProfile((p) => (p ? { ...p, email: t || null } : null))}
-              onBlur={() => saveField('email', profile.email ?? '')}
-              placeholder="ornek@valoria.com"
-              keyboardType="email-address"
-              autoCapitalize="none"
-              placeholderTextColor={theme.colors.textMuted}
-            />
-            <View style={styles.switchRow}>
-              <Text style={styles.switchLabel}>{t('showEmailToGuest')}</Text>
-              <Switch
-                value={profile.show_email_to_guest !== false}
-                onValueChange={(v) => saveVisibility('show_email_to_guest', v)}
-                trackColor={{ true: theme.colors.primary }}
-              />
-            </View>
-            <Text style={styles.label}>WhatsApp</Text>
-            <TextInput
-              style={styles.input}
-              value={profile.whatsapp ?? ''}
-              onChangeText={(t) => setProfile((p) => (p ? { ...p, whatsapp: t || null } : null))}
-              onBlur={() => saveField('whatsapp', profile.whatsapp ?? '')}
-              placeholder="05551234567"
-              keyboardType="phone-pad"
-              placeholderTextColor={theme.colors.textMuted}
-            />
-            <View style={styles.switchRow}>
-              <Text style={styles.switchLabel}>{t('showWhatsAppToGuest')}</Text>
-              <Switch
-                value={profile.show_whatsapp_to_guest !== false}
-                onValueChange={(v) => saveVisibility('show_whatsapp_to_guest', v)}
-                trackColor={{ true: theme.colors.primary }}
-              />
-            </View>
+          <Text style={styles.pageSectionLabel}>{t('permissionsLegal')}</Text>
+          <View style={styles.menuCard}>
+            <TouchableOpacity
+              style={[styles.menuRow, styles.menuRowLast]}
+              onPress={() => router.push('/permissions')}
+              activeOpacity={0.75}
+            >
+              <View style={styles.menuIconCircle}>
+                <Ionicons name="shield-checkmark-outline" size={22} color={theme.colors.primary} />
+              </View>
+              <View style={styles.menuRowTextCol}>
+                <Text style={styles.menuDetailTitle}>{t('permissionsLegal')}</Text>
+                <Text style={styles.menuDetailSub} numberOfLines={2}>
+                  {t('appPermissionsHint')}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color={theme.colors.textMuted} />
+            </TouchableOpacity>
           </View>
 
-          {/* Bilgilerim */}
-          <View style={styles.infoSection}>
-            <Text style={styles.sectionTitle}>{t('myInfo')}</Text>
-            <Text style={styles.label}>{t('bio')}</Text>
-            <TextInput
-              style={styles.input}
-              value={profile.bio ?? ''}
-              onChangeText={(t) => setProfile((p) => (p ? { ...p, bio: t } : null))}
-              onBlur={() => saveField('bio', profile.bio ?? '')}
-              placeholder={t('unspecified')}
-              placeholderTextColor={theme.colors.textMuted}
-              multiline
-            />
-            <Text style={styles.label}>{t('specialties')} {t('commaSeparated')}</Text>
-            <TextInput
-              style={styles.input}
-              value={profile.specialties?.join(', ') ?? ''}
-              onChangeText={(t) => setProfile((p) => (p ? { ...p, specialties: t ? t.split(',').map((s) => s.trim()).filter(Boolean) : [] } : null))}
-              onBlur={() => saveField('specialties', profile.specialties?.join(', ') ?? '')}
-              placeholder={t('unspecified')}
-              placeholderTextColor={theme.colors.textMuted}
-            />
-            <Text style={styles.label}>{t('languagesSpoken')}</Text>
-            <TextInput
-              style={styles.input}
-              value={profile.languages?.join(', ') ?? ''}
-              onChangeText={(t) => setProfile((p) => (p ? { ...p, languages: t ? t.split(',').map((s) => s.trim()).filter(Boolean) : [] } : null))}
-              onBlur={() => saveField('languages', profile.languages?.join(', ') ?? '')}
-              placeholder={t('unspecified')}
-              placeholderTextColor={theme.colors.textMuted}
-            />
-            <Text style={styles.label}>{t('achievements')} {t('commaSeparated')}</Text>
-            <TextInput
-              style={styles.input}
-              value={profile.achievements?.join(', ') ?? ''}
-              onChangeText={(t) => setProfile((p) => (p ? { ...p, achievements: t ? t.split(',').map((s) => s.trim()).filter(Boolean) : [] } : null))}
-              onBlur={() => saveField('achievements', profile.achievements?.join(', ') ?? '')}
-              placeholder={t('unspecified')}
-              placeholderTextColor={theme.colors.textMuted}
-            />
-          </View>
-
-          <View style={styles.sectionTitleWrap}>
-            <Text style={styles.sectionTitle}>🛡️ {t('permissionsLegal')}</Text>
-          </View>
-          <TouchableOpacity
-            style={[styles.card, styles.linkRow]}
-            onPress={() => router.push('/permissions')}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.linkRowText}>{t('appPermissionsHint')}</Text>
-            <Text style={styles.mutedRow}>→</Text>
-          </TouchableOpacity>
-
-          <View style={styles.sectionTitleWrap}>
-            <Text style={styles.sectionTitle}>🚫 {t('blockedUsersTitle')}</Text>
-          </View>
-          <View style={styles.card}>
-            {blockedUsers.length === 0 ? (
-              <Text style={styles.salaryMuted}>{t('noBlockedUsers')}</Text>
-            ) : (
-              blockedUsers.map((item) => (
-                <View key={item.blockId} style={styles.blockedRow}>
-                  <View style={styles.blockedRowText}>
-                    <Text style={styles.blockedName}>{item.name}</Text>
-                    <Text style={styles.blockedSub}>{item.subtitle ?? t('user')}</Text>
-                  </View>
-                  <TouchableOpacity style={styles.unblockBtn} onPress={() => handleUnblock(item)} disabled={unblockingId === item.blockId}>
-                    <Text style={styles.unblockBtnText}>{unblockingId === item.blockId ? '...' : t('removeBlock')}</Text>
-                  </TouchableOpacity>
-                </View>
-              ))
-            )}
-          </View>
-
-          <View style={styles.sectionTitleWrap}>
-            <Text style={styles.sectionTitle}>🗑️ {t('accountManagement')}</Text>
-          </View>
+          <Text style={styles.pageSectionLabel}>{t('accountManagement')}</Text>
           <TouchableOpacity
             style={[styles.card, styles.signOutButton]}
             onPress={handleSignOut}
@@ -983,20 +750,6 @@ export default function StaffProfileScreen() {
             <Text style={styles.mutedRow}>→</Text>
           </TouchableOpacity>
 
-          {reviews.length > 0 && (
-            <View style={styles.reviewsSection}>
-              <Text style={styles.sectionTitle}>💬 {t('reviewCount')} ({reviews.length})</Text>
-              {reviews.slice(0, 15).map((r) => (
-                <View key={r.id} style={styles.reviewCard}>
-                  <Text style={styles.reviewStars}>{'★'.repeat(r.rating)}</Text>
-                  {r.comment ? <Text style={styles.reviewComment}>{r.comment}</Text> : null}
-                </View>
-              ))}
-              {reviews.length > 15 && (
-                <Text style={styles.mutedRow}>+{reviews.length - 15} {t('moreReviews')}</Text>
-              )}
-            </View>
-          )}
         </View>
       </ScrollView>
 
@@ -1090,7 +843,7 @@ export default function StaffProfileScreen() {
           </Pressable>
         </Pressable>
       </Modal>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
@@ -1141,59 +894,138 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     zIndex: 20,
   },
-  profileHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 16,
-    paddingVertical: 20,
+  heroOverlap: {
+    marginTop: -18,
+    marginBottom: 6,
     paddingHorizontal: theme.spacing.lg,
+    zIndex: 5,
+  },
+  heroCard: {
     backgroundColor: theme.colors.surface,
-    marginHorizontal: 16,
-    marginTop: 12,
     borderRadius: 20,
+    paddingTop: theme.spacing.lg,
+    paddingBottom: theme.spacing.lg,
+    paddingHorizontal: theme.spacing.lg,
+    alignItems: 'center',
     borderWidth: 1,
     borderColor: theme.colors.borderLight,
     ...theme.shadows.md,
   },
-  avatarTouchWrap: { position: 'relative' },
-  avatar: {
-    width: 112,
-    height: 112,
-    borderRadius: 56,
-    borderWidth: 4,
+  heroAvatarWrap: { position: 'relative', marginTop: -32, marginBottom: 12 },
+  heroAvatarImg: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    borderWidth: 3,
     borderColor: theme.colors.surface,
     backgroundColor: theme.colors.borderLight,
-    ...theme.shadows.md,
-    shadowOpacity: 0.2,
-    elevation: 6,
   },
-  avatarSmall: { width: HEADER_AVATAR_SIZE, height: HEADER_AVATAR_SIZE, borderRadius: HEADER_AVATAR_SIZE / 2, borderWidth: 2 },
-  uploadOverlay: {
-    position: 'absolute',
-    inset: 0,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    borderRadius: 56,
+  heroAvatarOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 44,
+    backgroundColor: 'rgba(0,0,0,0.45)',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  uploadOverlaySmall: { borderRadius: HEADER_AVATAR_SIZE / 2 },
-  uploadText: { color: theme.colors.white, fontSize: 12 },
-  editPhotoBtn: {
+  heroAvatarCam: {
     position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    right: -2,
+    bottom: -2,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     backgroundColor: theme.colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 2,
     borderColor: theme.colors.surface,
   },
-  editPhotoBtnSmall: { width: 28, height: 28, borderRadius: 14 },
-  body: { padding: theme.spacing.lg, paddingTop: theme.spacing.md },
+  heroName: { ...theme.typography.titleSmall, color: theme.colors.text, textAlign: 'center' },
+  heroOrgTag: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: theme.colors.primary,
+    textAlign: 'center',
+    marginTop: 6,
+  },
+  heroSubtitle: {
+    fontSize: 14,
+    color: theme.colors.textSecondary,
+    textAlign: 'center',
+    marginTop: 4,
+    lineHeight: 20,
+    paddingHorizontal: 8,
+  },
+  heroEditCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 16,
+    alignSelf: 'stretch',
+    backgroundColor: theme.colors.primary,
+    paddingVertical: 14,
+    borderRadius: 14,
+  },
+  heroEditCtaText: { fontSize: 16, fontWeight: '800', color: theme.colors.white },
+  heroEditHint: {
+    fontSize: 12,
+    color: theme.colors.textMuted,
+    textAlign: 'center',
+    marginTop: 10,
+    lineHeight: 16,
+    paddingHorizontal: 8,
+  },
+  pageSectionLabel: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: theme.colors.textMuted,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    marginTop: theme.spacing.xl,
+    marginBottom: 10,
+  },
+  menuCard: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: theme.colors.borderLight,
+    overflow: 'hidden',
+    ...theme.shadows.sm,
+  },
+  menuRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.borderLight,
+    gap: 12,
+  },
+  menuRowLast: { borderBottomWidth: 0 },
+  menuIconCircle: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: theme.colors.primary + '16',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  menuRowTitle: { fontSize: 16, fontWeight: '700', color: theme.colors.text, flex: 1 },
+  menuRowTextCol: { flex: 1, minWidth: 0 },
+  menuDetailTitle: { fontSize: 16, fontWeight: '700', color: theme.colors.text },
+  menuDetailSub: { fontSize: 13, color: theme.colors.textMuted, marginTop: 2 },
+  menuBadge: {
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    paddingHorizontal: 6,
+    backgroundColor: theme.colors.error,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  menuBadgeText: { color: '#fff', fontSize: 11, fontWeight: '800' },
+  body: { padding: theme.spacing.lg, paddingTop: theme.spacing.sm },
   name: { ...theme.typography.title, color: theme.colors.text, textAlign: 'center' },
   dept: { fontSize: 15, color: theme.colors.textSecondary, marginTop: 4, textAlign: 'center' },
   position: { fontSize: 13, color: theme.colors.textMuted, marginTop: 2, textAlign: 'center' },
@@ -1219,9 +1051,13 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.lg,
     padding: theme.spacing.lg,
     marginTop: theme.spacing.sm,
+    marginBottom: theme.spacing.md,
     borderWidth: 1,
     borderColor: theme.colors.borderLight,
     ...theme.shadows.sm,
+  },
+  evaluationTeaserWrap: {
+    marginTop: theme.spacing.lg,
   },
   jobInfoRow: {
     flexDirection: 'row',
@@ -1249,6 +1085,7 @@ const styles = StyleSheet.create({
   },
   actionCard: {
     width: (SCREEN_WIDTH - theme.spacing.lg * 2 - 12) / 2,
+    position: 'relative',
     backgroundColor: theme.colors.surface,
     borderRadius: 20,
     paddingVertical: 20,
@@ -1261,6 +1098,20 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.06,
     elevation: 2,
   },
+  actionTaskBadge: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: theme.colors.error,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+    zIndex: 2,
+  },
+  actionTaskBadgeText: { color: '#fff', fontSize: 11, fontWeight: '800' },
   actionIconWrap: {
     width: 56,
     height: 56,

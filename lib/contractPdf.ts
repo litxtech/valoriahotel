@@ -1,11 +1,14 @@
 /**
  * Sözleşme PDF oluşturma – misafir verisi ile HTML üretip expo-print ile PDF, paylaşım.
  * İmza yoksa da PDF üretilir (web onayı vb.). Web'de yazdır penceresi fallback.
+ * Sayfa sayısı: admin Sözleşme tasarımı (kompakt + yazı boyutu) + dar PDF kenar boşlukları.
  */
 import { Platform } from 'react-native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { formatDateTime } from '@/lib/date';
+import { supabase } from '@/lib/supabase';
 
 export type GuestForPdf = {
   full_name: string;
@@ -35,7 +38,133 @@ function fmtMoney(n: number): string {
   return new Intl.NumberFormat('tr-TR', { style: 'decimal', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
 }
 
-export function buildContractHtml(guest: GuestForPdf): string {
+export type ContractPdfAppearance = {
+  fontSize: 'small' | 'normal' | 'large';
+  compact: boolean;
+};
+
+/** PDF/önizleme: ayar okunamazsa biraz sıkı varsayılan (daha az sayfa). */
+export const CONTRACT_PDF_FALLBACK_APPEARANCE: ContractPdfAppearance = {
+  fontSize: 'normal',
+  compact: true,
+};
+
+function appSettingToString(v: unknown): string {
+  if (v == null || v === '') return '';
+  if (typeof v === 'string') return v;
+  if (typeof v === 'boolean') return v ? '1' : '0';
+  if (typeof v === 'number') return String(v);
+  return String(v);
+}
+
+export async function fetchContractPdfAppearance(client: SupabaseClient = supabase): Promise<ContractPdfAppearance> {
+  try {
+    const { data } = await client.from('app_settings').select('key, value').in('key', ['contract_font_size', 'contract_compact']);
+    const map: Record<string, string> = {};
+    (data ?? []).forEach((r: { key: string; value: unknown }) => {
+      map[r.key] = appSettingToString(r.value);
+    });
+    const fs = map.contract_font_size;
+    const fontSize: ContractPdfAppearance['fontSize'] =
+      fs === 'small' || fs === 'large' ? fs : 'normal';
+    return {
+      fontSize,
+      compact: map.contract_compact === '1',
+    };
+  } catch {
+    return CONTRACT_PDF_FALLBACK_APPEARANCE;
+  }
+}
+
+/** Ekran + tarayıcı yazdır: A4, düzgün sayfa kırılımı ve siyah metin. */
+function contractPrintMediaCss(): string {
+  return `
+  @page {
+    size: A4;
+    margin: 12mm 14mm 14mm 14mm;
+  }
+  @media print {
+    html, body {
+      width: 100% !important;
+      margin: 0 !important;
+      background: #fff !important;
+      color: #000 !important;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
+    body {
+      padding: 0 !important;
+      font-size: 11pt !important;
+      line-height: 1.38 !important;
+    }
+    h1 {
+      color: #0f172a !important;
+      font-size: 13pt !important;
+      margin: 0 0 8pt 0 !important;
+      page-break-after: avoid;
+    }
+    .info {
+      background: #f1f5f9 !important;
+      border: 1px solid #e2e8f0;
+      border-radius: 4px;
+      padding: 8pt 10pt !important;
+      margin-bottom: 10pt !important;
+      page-break-inside: avoid;
+    }
+    .info p { margin: 2pt 0 !important; }
+    .contract {
+      font-size: 10pt !important;
+      line-height: 1.34 !important;
+      page-break-inside: auto;
+    }
+    .signature {
+      margin-top: 12pt !important;
+      page-break-inside: avoid;
+      page-break-before: auto;
+    }
+    .signature img {
+      max-width: 100% !important;
+      max-height: 42mm !important;
+      width: auto !important;
+      height: auto !important;
+    }
+  }
+  @media screen {
+    body { max-width: 210mm; margin: 0 auto; box-sizing: border-box; }
+  }
+`;
+}
+
+function pdfAppearanceCss(a: ContractPdfAppearance): string {
+  const scale = {
+    small: { body: 11, contract: 10.25, h1: 14 },
+    normal: { body: 12, contract: 11, h1: 15 },
+    large: { body: 14, contract: 13, h1: 18 },
+  }[a.fontSize];
+  const pad = a.compact ? 11 : 17;
+  const infoPad = a.compact ? '7px 9px' : '11px 13px';
+  const lh = a.compact ? 1.32 : 1.4;
+  const contractLh = a.compact ? 1.3 : 1.38;
+  const gap = a.compact ? 6 : 10;
+  return `
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: ${pad}px; color: #1a202c; font-size: ${scale.body}px; line-height: ${lh}; }
+    h1 { font-size: ${scale.h1}px; margin: 0 0 ${gap}px 0; color: #1a365d; line-height: 1.22; font-weight: 700; }
+    .info { background: #f7fafc; padding: ${infoPad}; border-radius: 6px; margin-bottom: ${gap}px; border: 1px solid #e2e8f0; }
+    .info p { margin: ${a.compact ? '1px' : '3px'} 0; }
+    .contract { white-space: normal; margin: ${a.compact ? '6px' : '10px'} 0; font-size: ${scale.contract}px; line-height: ${contractLh}; word-wrap: break-word; overflow-wrap: break-word; }
+    .signature { margin-top: ${a.compact ? 10 : 18}px; }
+    .signature img { max-width: ${a.compact ? 200 : 260}px; height: auto; }
+  `;
+}
+
+function printMarginsForAppearance(a: ContractPdfAppearance): { top: number; bottom: number; left: number; right: number } {
+  const m = a.compact ? 16 : 22;
+  return { top: m, bottom: m, left: m, right: m };
+}
+
+export function buildContractHtml(guest: GuestForPdf, appearance?: ContractPdfAppearance | null): string {
+  const a = appearance ?? CONTRACT_PDF_FALLBACK_APPEARANCE;
   const name = escapeHtml(guest.full_name);
   const phone = guest.phone ? escapeHtml(guest.phone) : '—';
   const email = guest.email ? escapeHtml(guest.email) : '—';
@@ -48,8 +177,11 @@ export function buildContractHtml(guest: GuestForPdf): string {
   const content = guest.contract_templates?.content
     ? escapeHtml(guest.contract_templates.content).replace(/\n/g, '<br/>')
     : '';
-  const sigImg = guest.signature_data
-    ? `<img src="${guest.signature_data}" alt="İmza" style="max-width:280px;height:auto;margin-top:16px;" />`
+  const sigSrc = guest.signature_data?.trim()
+    ? guest.signature_data!.trim().replace(/"/g, '&quot;')
+    : '';
+  const sigImg = sigSrc
+    ? `<img src="${sigSrc}" alt="İmza" style="max-width:280px;height:auto;margin-top:16px;" />`
     : '<p style="color:#64748b;font-style:italic;">Onay web veya uygulama üzerinden alındı; dijital imza görseli kayıtlı değil.</p>';
 
   const nightsLine =
@@ -67,14 +199,8 @@ export function buildContractHtml(guest: GuestForPdf): string {
 <html>
 <head>
   <meta charset="utf-8">
-  <style>
-    body { font-family: system-ui, sans-serif; padding: 24px; color: #1a202c; font-size: 14px; line-height: 1.5; }
-    h1 { font-size: 18px; margin-bottom: 16px; color: #1a365d; }
-    .info { background: #f7fafc; padding: 12px; border-radius: 8px; margin-bottom: 16px; }
-    .info p { margin: 4px 0; }
-    .contract { white-space: pre-wrap; margin: 16px 0; }
-    .signature { margin-top: 24px; }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes" />
+  <style>${pdfAppearanceCss(a)}${contractPrintMediaCss()}</style>
 </head>
 <body>
   <h1>Valoria Hotel – ${title}</h1>
@@ -98,9 +224,10 @@ export function buildContractHtml(guest: GuestForPdf): string {
 }
 
 /** Web'de HTML'i yeni pencerede açar; kullanıcı Ctrl+P ile PDF'e yazdırabilir. */
-export function openContractPrintWindow(guest: GuestForPdf): void {
+export async function openContractPrintWindow(guest: GuestForPdf): Promise<void> {
   if (Platform.OS !== 'web' || typeof window === 'undefined') return;
-  const html = buildContractHtml(guest);
+  const appearance = await fetchContractPdfAppearance();
+  const html = buildContractHtml(guest, appearance);
   const w = window.open('', '_blank', 'noopener');
   if (!w) return;
   w.document.write(html);
@@ -109,20 +236,65 @@ export function openContractPrintWindow(guest: GuestForPdf): void {
   setTimeout(() => w.print(), 300);
 }
 
+/** Web'de önizleme — yazdırma tetiklenmez. */
+export async function openContractPreviewWindow(guest: GuestForPdf): Promise<void> {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+  const appearance = await fetchContractPdfAppearance();
+  const html = buildContractHtml(guest, appearance);
+  const w = window.open('', '_blank', 'noopener');
+  if (!w) return;
+  w.document.write(html);
+  w.document.close();
+  w.focus();
+}
+
+export async function loadGuestForPdf(client: SupabaseClient, guestId: string): Promise<GuestForPdf | null> {
+  const { data: guest, error } = await client
+    .from('guests')
+    .select(
+      'full_name, phone, email, id_number, verified_at, created_at, signature_data, rooms(room_number), contract_templates(title, content), total_amount_net, nights_count, vat_amount, accommodation_tax_amount'
+    )
+    .eq('id', guestId)
+    .single();
+  if (error || !guest) return null;
+  return {
+    ...guest,
+    rooms: Array.isArray(guest.rooms) ? (guest.rooms[0] ?? null) : guest.rooms,
+    contract_templates: Array.isArray(guest.contract_templates)
+      ? (guest.contract_templates[0] ?? null)
+      : guest.contract_templates,
+  } as GuestForPdf;
+}
+
+/**
+ * Mobil yazdır: önce A4 PDF üretilir, sistem yazdırıcısına PDF verilir — HTML doğrudan yazdırmaya göre
+ * önizleme ve çıktı çok daha tutarlıdır (PDF indir / paylaş ile aynı görünüm).
+ */
+export async function printContractGuest(guest: GuestForPdf): Promise<void> {
+  if (Platform.OS === 'web') {
+    await openContractPrintWindow(guest);
+    return;
+  }
+  const uri = await exportContractPdf(guest);
+  await Print.printAsync({ uri });
+}
+
 export async function exportContractPdf(guest: GuestForPdf): Promise<string> {
-  const html = buildContractHtml(guest);
+  const appearance = await fetchContractPdfAppearance();
+  const html = buildContractHtml(guest, appearance);
+  const margins = printMarginsForAppearance(appearance);
   const { uri } = await Print.printToFileAsync({
     html,
     width: 595,
     height: 842,
-    margins: { top: 40, bottom: 40, left: 40, right: 40 },
+    margins,
   });
   return uri;
 }
 
 export async function shareContractPdf(guest: GuestForPdf): Promise<void> {
   if (Platform.OS === 'web') {
-    openContractPrintWindow(guest);
+    await openContractPrintWindow(guest);
     return;
   }
   try {
@@ -136,7 +308,7 @@ export async function shareContractPdf(guest: GuestForPdf): Promise<void> {
   } catch (e) {
     const msg = (e as Error)?.message ?? '';
     if (msg.includes('PDF hazır')) {
-      openContractPrintWindow(guest);
+      await openContractPrintWindow(guest);
       return;
     }
     throw e;

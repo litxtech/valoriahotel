@@ -23,6 +23,7 @@ import { theme } from '@/constants/theme';
 import { CachedImage } from '@/components/CachedImage';
 import { ImagePreviewModal } from '@/components/ImagePreviewModal';
 import { getHiddenUsersForGuest } from '@/lib/userBlocks';
+import { guestDisplayName } from '@/lib/guestDisplayName';
 
 const AVATAR_SIZE = 100;
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -109,7 +110,7 @@ export default function GuestProfileScreen() {
     );
   }
 
-  const displayName = (guest.full_name ?? 'Misafir').trim() || 'Misafir';
+  const displayName = guestDisplayName(guest.full_name, 'Misafir');
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={[styles.content, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 24 }]}>
@@ -141,7 +142,6 @@ export default function GuestProfileScreen() {
 
       {posts.length > 0 ? (
         <View style={styles.postsSection}>
-          <Text style={styles.sectionTitle}>Paylaşımlar</Text>
           {posts.map((p) => (
             <TouchableOpacity
               key={p.id}
@@ -209,11 +209,11 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   avatarPlaceholder: {
-    backgroundColor: theme.colors.primaryLight + '50',
+    backgroundColor: theme.colors.guestAvatarBg,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  avatarLetterSmall: { fontSize: 24, fontWeight: '700', color: theme.colors.primary },
+  avatarLetterSmall: { fontSize: 24, fontWeight: '700', color: theme.colors.guestAvatarLetter },
   nameBlock: { alignItems: 'center' },
   name: { fontSize: 22, fontWeight: '700', color: theme.colors.text, marginBottom: 8, textAlign: 'center' },
   badge: {
@@ -224,7 +224,6 @@ const styles = StyleSheet.create({
   },
   badgeText: { fontSize: 13, fontWeight: '600', color: theme.colors.primary },
   postsSection: { marginTop: 8 },
-  sectionTitle: { fontSize: 17, fontWeight: '700', color: theme.colors.text, marginBottom: 12 },
   postCard: {
     flexDirection: 'row',
     backgroundColor: theme.colors.surface,

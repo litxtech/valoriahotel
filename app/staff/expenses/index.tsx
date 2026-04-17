@@ -64,7 +64,7 @@ export default function StaffExpensesScreen() {
       .order('expense_date', { ascending: false })
       .order('created_at', { ascending: false })
       .limit(100);
-    const rows = (list ?? []) as ExpenseRow[];
+    const rows = (list ?? []) as unknown as ExpenseRow[];
     setExpenses(rows);
 
     const thisMonth = rows

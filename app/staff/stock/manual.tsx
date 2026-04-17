@@ -7,6 +7,7 @@ import {
   ScrollView,
   StyleSheet,
   Alert,
+  Platform,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
@@ -65,9 +66,12 @@ export default function StaffStockManualEntryScreen() {
       settingsMessage: 'Kamera izni kapalı. Stok fotoğrafı için ayarlardan izin verin.',
     });
     if (!granted) return;
+    if (Platform.OS === 'android') {
+      await new Promise((r) => setTimeout(r, 320));
+    }
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
+      allowsEditing: Platform.OS === 'ios',
       quality: 0.6,
       base64: true,
     });
@@ -99,7 +103,7 @@ export default function StaffStockManualEntryScreen() {
     }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
+      allowsEditing: Platform.OS === 'ios',
       quality: 0.6,
       base64: true,
     });
@@ -123,6 +127,10 @@ export default function StaffStockManualEntryScreen() {
   const submit = async () => {
     if (!staff?.id) {
       Alert.alert('Eksik', 'Oturum gerekli.');
+      return;
+    }
+    if (!staff.organization_id) {
+      Alert.alert('Hata', 'İşletme bilgisi eksik. Yöneticinize başvurun.');
       return;
     }
     const name = productName.trim();
@@ -150,6 +158,7 @@ export default function StaffStockManualEntryScreen() {
           unit: unit || 'adet',
           current_stock: 0,
           created_by: staff.id,
+          organization_id: staff.organization_id,
         })
         .select('id')
         .single();
@@ -176,11 +185,12 @@ export default function StaffStockManualEntryScreen() {
       });
       if (error) throw error;
 
-      const { notifyAdmins } = await import('@/lib/notificationService');
-      notifyAdmins({
+      const { sendBulkToStaff } = await import('@/lib/notificationService');
+      sendBulkToStaff({
+        target: 'all_staff',
         title: '📦 Stok onay bekliyor',
-        body: 'Yeni stok hareketi (manuel giriş) onayınızı bekliyor.',
-        data: { url: '/admin/stock/approvals' },
+        body: 'Yeni stok girişi (manuel) kaydedildi; onay bekleniyor.',
+        createdByStaffId: staff.id,
       }).catch(() => {});
 
       Alert.alert('Kaydedildi', 'Stok girişiniz admin onayından sonra işlenecek.', () => router.replace('/staff/stock'));

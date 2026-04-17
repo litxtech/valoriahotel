@@ -20,7 +20,9 @@ import {
 } from 'react-native';
 import { useRouter, useNavigation, useFocusEffect } from 'expo-router';
 import { Video, Audio } from 'expo-av';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import type { ComponentProps } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/authStore';
 import { useScrollToTopStore } from '@/stores/scrollToTopStore';
@@ -29,6 +31,7 @@ import { formatRelative } from '@/lib/date';
 import { StaffNameWithBadge, AvatarWithBadge } from '@/components/VerifiedBadge';
 import { Skeleton, SkeletonCard } from '@/components/ui/Skeleton';
 import { getOrCreateGuestForCurrentSession } from '@/lib/getOrCreateGuestForCaller';
+import { guestDisplayName, isOpaqueGuestDisplayString } from '@/lib/guestDisplayName';
 import { notifyAdmins, sendNotification } from '@/lib/notificationService';
 import { CachedImage } from '@/components/CachedImage';
 import { formatDistanceToNow } from 'date-fns';
@@ -36,6 +39,7 @@ import { tr } from 'date-fns/locale';
 import { KeyboardAvoidingView } from 'react-native';
 import { blockUserForGuest, getHiddenUsersForGuest } from '@/lib/userBlocks';
 import { POST_TAGS, type PostTagValue } from '@/lib/feedPostTags';
+import { sortStaffAdminFirst } from '@/lib/sortStaffAdminFirst';
 
 type CustomerCommentRow = {
   id: string;
@@ -65,6 +69,7 @@ type StaffRow = {
   last_active: string | null;
   work_status: string | null;
   verification_badge?: 'blue' | 'yellow' | null;
+  role?: string | null;
 };
 
 type GuestRow = {
@@ -114,14 +119,47 @@ const WORK_STATUS_COLOR: Record<string, string> = {
   leave: '#9ca3af',
 };
 
+type IoniconName = ComponentProps<typeof Ionicons>['name'];
+
+function getTimeGreetingTr(): string {
+  const h = new Date().getHours();
+  if (h >= 5 && h < 12) return 'Günaydın';
+  if (h >= 12 && h < 17) return 'İyi günler';
+  if (h >= 17 && h < 22) return 'İyi akşamlar';
+  return 'İyi geceler';
+}
+
+const GLYPH = Ionicons.glyphMap as Record<string, number>;
+
+function getFacilityIonIcon(icon: string | null, facilityName: string): IoniconName {
+  const key = icon?.trim().toLowerCase().replace(/^ionicons?:/, '').replace(/_/g, '-') ?? '';
+  if (key && key in GLYPH) return key as IoniconName;
+  const n = facilityName.toLowerCase();
+  if (n.includes('havuz')) return 'water-outline';
+  if (n.includes('spa') || n.includes('wellness')) return 'leaf-outline';
+  if (n.includes('fitness') || n.includes('spor')) return 'barbell-outline';
+  if (n.includes('wifi')) return 'wifi-outline';
+  if (n.includes('restoran') || n.includes('yemek')) return 'restaurant-outline';
+  if (n.includes('kahvaltı')) return 'cafe-outline';
+  if (n.includes('otopark') || n.includes('park')) return 'car-outline';
+  if (n.includes('çocuk')) return 'happy-outline';
+  return 'sparkles-outline';
+}
+
 function getDisplayName(): string {
   const { user } = useAuthStore.getState();
   if (!user) return '';
   const name = user.user_metadata?.full_name ?? user.user_metadata?.name;
-  if (name && typeof name === 'string') return name.trim();
+  if (name && typeof name === 'string') {
+    const t = name.trim();
+    if (t && !isOpaqueGuestDisplayString(t)) return t;
+  }
   const email = user.email ?? '';
   const part = email.split('@')[0];
-  if (part) return part.charAt(0).toUpperCase() + part.slice(1);
+  if (part) {
+    const cap = part.charAt(0).toUpperCase() + part.slice(1);
+    if (!isOpaqueGuestDisplayString(cap)) return cap;
+  }
   return 'Misafir';
 }
 
@@ -221,7 +259,7 @@ export default function CustomerHome() {
       (async () => {
         const { data } = await supabase
           .from('staff')
-          .select('id, full_name, department, profile_image, is_online, last_active, work_status, verification_badge, email')
+          .select('id, full_name, department, profile_image, is_online, last_active, work_status, verification_badge, email, role')
           .eq('is_active', true)
           .is('deleted_at', null)
           .order('is_online', { ascending: false })
@@ -230,9 +268,29 @@ export default function CustomerHome() {
         const byKey = new Map<string, StaffRow>();
         rows.forEach((r) => {
           const key = (r.email && r.email.trim()) ? r.email.trim().toLowerCase() : r.id;
-          if (!byKey.has(key)) byKey.set(key, { id: r.id, full_name: r.full_name, department: r.department, profile_image: r.profile_image, is_online: r.is_online, last_active: r.last_active, work_status: r.work_status, verification_badge: r.verification_badge });
+          if (!byKey.has(key)) {
+            byKey.set(key, {
+              id: r.id,
+              full_name: r.full_name,
+              department: r.department,
+              profile_image: r.profile_image,
+              is_online: r.is_online,
+              last_active: r.last_active,
+              work_status: r.work_status,
+              verification_badge: r.verification_badge,
+              role: r.role,
+            });
+          }
         });
-        return { data: Array.from(byKey.values()) };
+        const deduped = Array.from(byKey.values());
+        return {
+          data: sortStaffAdminFirst(deduped, (a, b) => {
+            const onA = a.is_online ? 1 : 0;
+            const onB = b.is_online ? 1 : 0;
+            if (onA !== onB) return onB - onA;
+            return (b.last_active ?? '').localeCompare(a.last_active ?? '');
+          }),
+        };
       })(),
       supabase.from('hotel_info').select('id, name, description, address, stars').limit(1).maybeSingle(),
       supabase
@@ -577,7 +635,9 @@ export default function CustomerHome() {
     if (!targetType || !targetId) return;
     const rawStaff = post.staff as { full_name?: string | null } | null;
     const rawGuest = post.guest as { full_name?: string | null } | null;
-    const targetName = (rawStaff?.full_name ?? rawGuest?.full_name ?? 'Bu kullanıcı').trim() || 'Bu kullanıcı';
+    const targetName = targetStaffId
+      ? ((rawStaff?.full_name ?? '').trim() || 'Bu kullanıcı')
+      : guestDisplayName(rawGuest?.full_name, 'Bu kullanıcı');
 
     Alert.alert('Kullanıcıyı engelle', `${targetName} artık sizi göremez ve siz de onu göremezsiniz.`, [
       { text: 'İptal', style: 'cancel' },
@@ -648,11 +708,12 @@ export default function CustomerHome() {
   if (loading && activeStaff.length === 0 && !hotelInfo) {
     return (
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-        <View style={styles.welcomeBlock}>
-          <Skeleton height={28} width={220} borderRadius={8} style={{ marginBottom: 6 }} />
-          <Skeleton height={18} width={180} borderRadius={6} />
+        <Skeleton height={118} borderRadius={theme.radius.lg} style={{ marginBottom: theme.spacing.md }} />
+        <View style={styles.quickActionsRow}>
+          {[1, 2, 3, 4].map((i) => (
+            <Skeleton key={i} height={72} borderRadius={theme.radius.md} style={{ flex: 1, minWidth: 0 }} />
+          ))}
         </View>
-        <Skeleton height={48} borderRadius={12} style={{ marginBottom: 24 }} />
         <View style={styles.categoryRow}>
           {[1, 2, 3, 4, 5].map((i) => (
             <Skeleton key={i} width={56} height={56} borderRadius={12} style={{ marginRight: 12 }} />
@@ -685,15 +746,136 @@ export default function CustomerHome() {
         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.colors.primary} />
       }
     >
-      <View style={styles.welcomeBlock}>
-        <Text style={styles.welcomeTitle}>
-          {displayName ? `Hoş geldin, ${displayName}` : 'Hoş geldin'}
+      <LinearGradient
+        colors={['#faf6ec', '#f3e8d4', theme.colors.surface]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.heroCard}
+      >
+        <Text style={styles.heroTitle} numberOfLines={2}>
+          {getTimeGreetingTr()}
+          {displayName ? `, ${displayName}` : ''}
         </Text>
-        <View style={styles.welcomeLocationRow}>
-          <Ionicons name="location-outline" size={16} color={theme.colors.textSecondary} />
-          <Text style={styles.welcomeLocation}>{locationName}</Text>
-        </View>
+        <Text style={styles.heroSubtitle} numberOfLines={2}>
+          {locationName}
+          {hotelInfo?.stars != null && hotelInfo.stars > 0
+            ? ` · ${hotelInfo.stars} yıldız`
+            : ''}
+        </Text>
+        {hotelInfo?.address?.trim() ? (
+          <View style={styles.heroLocationChip}>
+            <Ionicons name="location" size={15} color={theme.colors.primaryDark} />
+            <Text style={styles.heroLocationChipText} numberOfLines={2}>
+              {hotelInfo.address.trim()}
+            </Text>
+          </View>
+        ) : null}
+        {hotelInfo?.description?.trim() ? (
+          <Text style={styles.heroDescription} numberOfLines={2}>
+            {hotelInfo.description.trim()}
+          </Text>
+        ) : null}
+      </LinearGradient>
+
+      <View style={styles.quickActionsRow}>
+        <TouchableOpacity style={styles.quickActionItem} onPress={() => router.push('/(tabs)/map')} activeOpacity={0.85}>
+          <View style={styles.quickActionIconWrap}>
+            <Ionicons name="map-outline" size={22} color={theme.colors.primaryDark} />
+          </View>
+          <Text style={styles.quickActionLabel}>Harita</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.quickActionItem} onPress={() => router.push('/customer/notifications')} activeOpacity={0.85}>
+          <View style={styles.quickActionIconWrap}>
+            <Ionicons name="notifications-outline" size={22} color={theme.colors.primaryDark} />
+          </View>
+          <Text style={styles.quickActionLabel}>Bildirimler</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.quickActionItem} onPress={() => router.push('/(tabs)/messages')} activeOpacity={0.85}>
+          <View style={styles.quickActionIconWrap}>
+            <Ionicons name="chatbubbles-outline" size={22} color={theme.colors.primaryDark} />
+          </View>
+          <Text style={styles.quickActionLabel}>Mesajlar</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.quickActionItem} onPress={() => router.push('/customer/feed/new')} activeOpacity={0.85}>
+          <View style={styles.quickActionIconWrap}>
+            <Ionicons name="add-circle-outline" size={22} color={theme.colors.primaryDark} />
+          </View>
+          <Text style={styles.quickActionLabel}>Paylaş</Text>
+        </TouchableOpacity>
       </View>
+
+      {myRoom ? (
+        <>
+          <Text style={[styles.sectionTitle, styles.sectionTitleAfterHero]}>Odam</Text>
+          <View style={styles.roomCard}>
+            <View style={styles.roomCardAccent} />
+            <View style={styles.roomCardInner}>
+              <View style={styles.roomCardHeader}>
+                <View style={styles.roomNumberBadge}>
+                  <Ionicons name="bed-outline" size={20} color={theme.colors.primary} />
+                  <Text style={styles.roomTitle}>Oda {myRoom.room_number}</Text>
+                </View>
+                {myRoom.view_type ? (
+                  <View style={styles.roomViewChip}>
+                    <Text style={styles.roomViewChipText}>{myRoom.view_type}</Text>
+                  </View>
+                ) : null}
+              </View>
+              <View style={styles.roomDatesRow}>
+                {myRoom.check_in_at && (
+                  <View style={styles.roomDateItem}>
+                    <Ionicons name="log-in-outline" size={14} color={theme.colors.textSecondary} />
+                    <Text style={styles.roomMeta}>{new Date(myRoom.check_in_at).toLocaleDateString('tr-TR')} · 14:00</Text>
+                  </View>
+                )}
+                {myRoom.check_out_at && (
+                  <View style={styles.roomDateItem}>
+                    <Ionicons name="log-out-outline" size={14} color={theme.colors.textSecondary} />
+                    <Text style={styles.roomMeta}>{new Date(myRoom.check_out_at).toLocaleDateString('tr-TR')} · 11:00</Text>
+                  </View>
+                )}
+              </View>
+              <View style={styles.roomActions}>
+                <TouchableOpacity style={styles.roomBtn} onPress={() => router.push('/customer/key')} activeOpacity={0.8}>
+                  <Ionicons name="key-outline" size={18} color={theme.colors.primary} />
+                  <Text style={styles.roomBtnText}>Dijital anahtar</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.roomBtn} onPress={() => router.push('/customer/room-service/')} activeOpacity={0.8}>
+                  <Ionicons name="restaurant-outline" size={18} color={theme.colors.primary} />
+                  <Text style={styles.roomBtnText}>Oda servisi</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.roomBtn} onPress={() => router.push('/(tabs)/messages')} activeOpacity={0.8}>
+                  <Ionicons name="sparkles-outline" size={18} color={theme.colors.primary} />
+                  <Text style={styles.roomBtnText}>Temizlik iste</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </>
+      ) : null}
+
+      {facilities.length > 0 ? (
+        <>
+          <Text style={styles.sectionLabel}>Tesis ve olanaklar</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.facilitiesRow}
+            style={styles.storyScroll}
+          >
+            {facilities.map((f, idx) => (
+              <View key={`${f.name}-${idx}`} style={styles.facilityChip}>
+                <View style={styles.facilityIconCircle}>
+                  <Ionicons name={getFacilityIonIcon(f.icon, f.name)} size={22} color={theme.colors.primaryDark} />
+                </View>
+                <Text style={styles.facilityChipName} numberOfLines={2}>
+                  {f.name}
+                </Text>
+              </View>
+            ))}
+          </ScrollView>
+        </>
+      ) : null}
 
       {/* Personeller - kart stili */}
       <Text style={styles.sectionLabel}>Personeller</Text>
@@ -757,7 +939,7 @@ export default function CustomerHome() {
             style={styles.storyScroll}
           >
             {activeGuests.map((guest) => {
-              const name = (guest.full_name ?? 'Misafir').trim() || 'Misafir';
+              const name = guestDisplayName(guest.full_name, 'Misafir');
               const firstName = name.split(' ')[0] || 'Misafir';
               return (
                 <TouchableOpacity
@@ -771,8 +953,8 @@ export default function CustomerHome() {
                       {guest.photo_url ? (
                         <CachedImage uri={guest.photo_url} style={styles.staffCardAvatar} contentFit="cover" />
                       ) : (
-                        <View style={[styles.staffCardAvatar, styles.staffCardPlaceholder]}>
-                          <Text style={styles.staffCardLetter}>{firstName.charAt(0).toUpperCase()}</Text>
+                        <View style={[styles.staffCardAvatar, styles.staffCardPlaceholderGuest]}>
+                          <Text style={styles.staffCardLetterGuest}>{firstName.charAt(0).toUpperCase()}</Text>
                         </View>
                       )}
                     </View>
@@ -788,15 +970,8 @@ export default function CustomerHome() {
         )}
       </View>
 
-      {/* Paylaşımlar (feed) */}
-      <View style={styles.sectionTitleRow}>
-        <Text style={[styles.sectionTitle, { marginTop: 0 }]}>Paylaşımlar</Text>
-        <TouchableOpacity style={styles.shareBtn} onPress={() => router.push('/customer/feed/new')} activeOpacity={0.8}>
-          <Ionicons name="add-circle-outline" size={22} color={theme.colors.primary} />
-          <Text style={styles.shareBtnText}>Paylaş</Text>
-        </TouchableOpacity>
-      </View>
-      <View style={styles.collapseSection}>
+      <Text style={styles.feedSectionHeading}>Paylaşımlar</Text>
+      <View style={[styles.collapseSection, styles.feedBlockTop]}>
         <TouchableOpacity style={styles.collapseHeader} onPress={() => setTagFiltersExpanded(!tagFiltersExpanded)} activeOpacity={0.7}>
           <Text style={styles.collapseLabel}>Etiket filtreleri</Text>
           <Ionicons name={tagFiltersExpanded ? 'chevron-up' : 'chevron-down'} size={22} color={theme.colors.primary} />
@@ -825,9 +1000,29 @@ export default function CustomerHome() {
       </View>
       {filteredPosts.length === 0 ? (
         <View style={styles.emptyFeed}>
-          <Text style={styles.emptyFeedText}>
-            {feedTagFilter ? `${POST_TAGS.find((t) => t.value === feedTagFilter)?.label ?? feedTagFilter} etiketli paylaşım yok.` : 'Henüz paylaşım yok.'}
+          <View style={styles.emptyFeedIconWrap}>
+            <Ionicons name="images-outline" size={40} color={theme.colors.primary} />
+          </View>
+          <Text style={styles.emptyFeedTitle}>
+            {feedTagFilter
+              ? 'Bu etikette paylaşım yok'
+              : 'Henüz paylaşım yok'}
           </Text>
+          <Text style={styles.emptyFeedText}>
+            {feedTagFilter
+              ? `${POST_TAGS.find((t) => t.value === feedTagFilter)?.label ?? feedTagFilter} etiketini kaldırarak tüm gönderileri görebilir veya başka bir etiket seçebilirsiniz.`
+              : 'Personel ve misafirlerden gelen fotoğraf ve duyurular burada görünecek. İlk paylaşımı siz yapabilirsiniz.'}
+          </Text>
+          {!feedTagFilter ? (
+            <TouchableOpacity style={styles.emptyFeedCta} onPress={() => router.push('/customer/feed/new')} activeOpacity={0.85}>
+              <Ionicons name="camera-outline" size={20} color="#fff" />
+              <Text style={styles.emptyFeedCtaText}>Paylaşım oluştur</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity style={styles.emptyFeedCtaSecondary} onPress={() => setFeedTagFilter(null)} activeOpacity={0.85}>
+              <Text style={styles.emptyFeedCtaSecondaryText}>Tüm paylaşımları göster</Text>
+            </TouchableOpacity>
+          )}
         </View>
       ) : (
         <View style={styles.feedList}>
@@ -836,7 +1031,9 @@ export default function CustomerHome() {
             const rawGuest = post.guest;
             const staffInfo = Array.isArray(rawStaff) ? rawStaff[0] ?? null : rawStaff;
             const guestInfo = Array.isArray(rawGuest) ? (rawGuest[0] as { full_name?: string | null; photo_url?: string | null } | null) ?? null : (rawGuest as { full_name?: string | null; photo_url?: string | null } | null);
-            const authorName = (staffInfo?.full_name ?? guestInfo?.full_name ?? 'Misafir').trim() || 'Misafir';
+            const authorName = staffInfo
+              ? (staffInfo.full_name?.trim() || 'Personel')
+              : guestDisplayName(guestInfo?.full_name, 'Misafir');
             const dept = staffInfo?.department;
             const badge = staffInfo?.verification_badge ?? null;
             const profileImage = staffInfo?.profile_image ?? guestInfo?.photo_url ?? null;
@@ -860,8 +1057,8 @@ export default function CustomerHome() {
                   {profileImage ? (
                     <CachedImage uri={profileImage} style={styles.feedAvatar} contentFit="cover" />
                   ) : (
-                    <View style={[styles.feedAvatar, styles.feedAvatarPlaceholder]}>
-                      <Text style={styles.feedAvatarLetter}>{avatarLetter}</Text>
+                    <View style={[styles.feedAvatar, isGuest ? styles.feedAvatarPlaceholderGuest : styles.feedAvatarPlaceholder]}>
+                      <Text style={isGuest ? styles.feedAvatarLetterGuest : styles.feedAvatarLetter}>{avatarLetter}</Text>
                     </View>
                   )}
                   <View style={styles.feedItemHeaderText}>
@@ -1069,7 +1266,10 @@ export default function CustomerHome() {
                         <Text style={styles.commentSheetEmpty}>Henüz yorum yok. İlk yorumu sen yap.</Text>
                       ) : (
                         comments.map((c) => {
-                          const authorName = (c.staff?.full_name ?? c.guest?.full_name ?? '—').trim() || '—';
+                          const isGuestComment = !c.staff_id && !!c.guest_id;
+                          const authorName = isGuestComment
+                            ? guestDisplayName(c.guest?.full_name, '—')
+                            : ((c.staff?.full_name ?? '—').trim() || '—');
                           const avatarUri = c.staff?.profile_image ?? c.guest?.photo_url ?? null;
                           const canDelete = !!(myGuestId && c.guest_id && c.guest_id === myGuestId && !c.staff_id);
                           return (
@@ -1077,8 +1277,8 @@ export default function CustomerHome() {
                               {avatarUri ? (
                                 <CachedImage uri={avatarUri} style={styles.commentSheetAvatar} contentFit="cover" />
                               ) : (
-                                <View style={styles.commentSheetAvatarPlaceholder}>
-                                  <Text style={styles.commentSheetAvatarInitial}>{(authorName || '—').charAt(0).toUpperCase()}</Text>
+                                <View style={isGuestComment ? styles.commentSheetAvatarPlaceholderGuest : styles.commentSheetAvatarPlaceholder}>
+                                  <Text style={isGuestComment ? styles.commentSheetAvatarInitialGuest : styles.commentSheetAvatarInitial}>{(authorName || '—').charAt(0).toUpperCase()}</Text>
                                 </View>
                               )}
                               <View style={styles.commentSheetRowBody}>
@@ -1190,57 +1390,6 @@ export default function CustomerHome() {
         </Pressable>
       </Modal>
 
-      {/* Odam kartı */}
-      {myRoom && (
-        <>
-          <Text style={styles.sectionTitle}>Odam</Text>
-          <View style={styles.roomCard}>
-            <View style={styles.roomCardAccent} />
-            <View style={styles.roomCardInner}>
-              <View style={styles.roomCardHeader}>
-                <View style={styles.roomNumberBadge}>
-                  <Ionicons name="bed-outline" size={20} color={theme.colors.primary} />
-                  <Text style={styles.roomTitle}>Oda {myRoom.room_number}</Text>
-                </View>
-                {myRoom.view_type ? (
-                  <View style={styles.roomViewChip}>
-                    <Text style={styles.roomViewChipText}>{myRoom.view_type}</Text>
-                  </View>
-                ) : null}
-              </View>
-              <View style={styles.roomDatesRow}>
-                {myRoom.check_in_at && (
-                  <View style={styles.roomDateItem}>
-                    <Ionicons name="log-in-outline" size={14} color={theme.colors.textSecondary} />
-                    <Text style={styles.roomMeta}>{new Date(myRoom.check_in_at).toLocaleDateString('tr-TR')} · 14:00</Text>
-                  </View>
-                )}
-                {myRoom.check_out_at && (
-                  <View style={styles.roomDateItem}>
-                    <Ionicons name="log-out-outline" size={14} color={theme.colors.textSecondary} />
-                    <Text style={styles.roomMeta}>{new Date(myRoom.check_out_at).toLocaleDateString('tr-TR')} · 11:00</Text>
-                  </View>
-                )}
-              </View>
-              <View style={styles.roomActions}>
-                <TouchableOpacity style={styles.roomBtn} onPress={() => router.push('/customer/key')} activeOpacity={0.8}>
-                  <Ionicons name="key-outline" size={18} color={theme.colors.primary} />
-                  <Text style={styles.roomBtnText}>Dijital anahtar</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.roomBtn} onPress={() => router.push('/customer/room-service/')} activeOpacity={0.8}>
-                  <Ionicons name="restaurant-outline" size={18} color={theme.colors.primary} />
-                  <Text style={styles.roomBtnText}>Oda servisi</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.roomBtn} onPress={() => router.push('/(tabs)/messages')} activeOpacity={0.8}>
-                  <Ionicons name="sparkles-outline" size={18} color={theme.colors.primary} />
-                  <Text style={styles.roomBtnText}>Temizlik iste</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </>
-      )}
-
       {/* Gönderi medyası tam ekran (resim / video) — personel ile aynı */}
       <Modal
         visible={!!fullscreenPostMedia}
@@ -1309,23 +1458,113 @@ export default function CustomerHome() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.backgroundSecondary },
   content: { padding: theme.spacing.lg, paddingBottom: theme.spacing.xxl + 24 },
-  welcomeBlock: { marginTop: 2, marginBottom: theme.spacing.lg },
-  welcomeTitle: { ...theme.typography.title, color: theme.colors.text, marginBottom: 4 },
-  welcomeLocationRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  welcomeLocation: { ...theme.typography.bodySmall, color: theme.colors.textSecondary },
+  heroCard: {
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.lg,
+    marginBottom: theme.spacing.md,
+    borderWidth: 1,
+    borderColor: `${theme.colors.primary}28`,
+    ...theme.shadows.md,
+  },
+  heroTitle: { fontSize: 24, fontWeight: '800', color: theme.colors.text, lineHeight: 30, marginBottom: 6 },
+  heroSubtitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: theme.colors.textSecondary,
+    marginTop: 6,
+    lineHeight: 22,
+  },
+  heroLocationChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+    marginTop: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: theme.radius.full,
+    backgroundColor: 'rgba(255,255,255,0.75)',
+    borderWidth: 1,
+    borderColor: theme.colors.borderLight,
+    maxWidth: '100%',
+  },
+  heroLocationChipText: { flex: 1, fontSize: 13, color: theme.colors.text, fontWeight: '500' },
+  heroDescription: {
+    marginTop: 12,
+    fontSize: 14,
+    lineHeight: 21,
+    color: theme.colors.textSecondary,
+  },
+  quickActionsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: theme.spacing.lg,
+  },
+  quickActionItem: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 4,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: theme.colors.borderLight,
+    ...theme.shadows.sm,
+  },
+  quickActionIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: `${theme.colors.primary}14`,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  quickActionLabel: { fontSize: 11, fontWeight: '600', color: theme.colors.text, textAlign: 'center' },
+  facilitiesRow: {
+    flexDirection: 'row',
+    paddingVertical: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.lg,
+    gap: 12,
+    paddingRight: theme.spacing.xl,
+  },
+  facilityChip: {
+    width: 88,
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: theme.colors.borderLight,
+    ...theme.shadows.sm,
+  },
+  facilityIconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: `${theme.colors.primary}12`,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  facilityChipName: { fontSize: 11, fontWeight: '600', color: theme.colors.text, textAlign: 'center', lineHeight: 14 },
+  sectionTitleAfterHero: { marginTop: theme.spacing.sm },
+  feedSectionHeading: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: theme.colors.text,
+    marginTop: theme.spacing.xl,
+    marginBottom: theme.spacing.sm,
+    letterSpacing: 0.2,
+  },
   sectionLabel: {
     fontSize: 13,
     fontWeight: '600',
     color: theme.colors.textSecondary,
     marginBottom: theme.spacing.sm,
     letterSpacing: 0.3,
-  },
-  sectionTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: theme.spacing.xl,
-    marginBottom: theme.spacing.md,
   },
   sectionTitle: {
     fontSize: 17,
@@ -1335,14 +1574,6 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing.md,
     letterSpacing: 0.2,
   },
-  shareBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-  },
-  shareBtnText: { fontSize: 15, fontWeight: '600', color: theme.colors.primary },
   storyScroll: { marginHorizontal: -theme.spacing.lg },
   storyRow: {
     flexDirection: 'row',
@@ -1400,7 +1631,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: theme.colors.primaryLight + '50',
   },
+  staffCardPlaceholderGuest: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: theme.colors.guestAvatarBg,
+  },
   staffCardLetter: { fontSize: 26, fontWeight: '700', color: theme.colors.primary },
+  staffCardLetterGuest: { fontSize: 26, fontWeight: '700', color: theme.colors.guestAvatarLetter },
   staffCardTextBlock: { minHeight: 36, alignItems: 'center', justifyContent: 'flex-start' },
   staffCardName: { fontWeight: '600', fontSize: 13, color: theme.colors.text, textAlign: 'center' },
   staffCardDept: { fontSize: 11, color: theme.colors.textMuted, marginTop: 4, textAlign: 'center' },
@@ -1560,6 +1797,7 @@ const styles = StyleSheet.create({
   messageLabel: { fontSize: 15, fontWeight: '600', color: theme.colors.text },
   messageDept: { fontSize: 13, color: theme.colors.textMuted, marginTop: 2 },
   collapseSection: { marginBottom: 4 },
+  feedBlockTop: { marginTop: theme.spacing.xs },
   collapseHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1636,10 +1874,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: theme.colors.primary + '20',
   },
+  feedAvatarPlaceholderGuest: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: theme.colors.guestAvatarBg,
+  },
   feedAvatarLetter: {
     fontSize: 16,
     fontWeight: '700',
     color: theme.colors.primary,
+  },
+  feedAvatarLetterGuest: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: theme.colors.guestAvatarLetter,
   },
   feedItemHeaderText: { flex: 1, minWidth: 0 },
   feedHeaderActions: { flexDirection: 'row', alignItems: 'center', gap: 2 },
@@ -1720,14 +1968,18 @@ const styles = StyleSheet.create({
   },
   reportSubmitBtnDisabled: { opacity: 0.5 },
   reportSubmitBtnText: { color: '#fff', fontWeight: '700', fontSize: 16 },
-  postMediaTouchable: { width: '100%' },
-  postImageWrap: { position: 'relative', width: '100%' },
+  postMediaTouchable: { width: '100%', paddingHorizontal: 12 },
+  postImageWrap: {
+    position: 'relative',
+    width: '100%',
+    aspectRatio: 4 / 5,
+    overflow: 'hidden',
+    borderRadius: 16,
+    backgroundColor: theme.colors.borderLight,
+  },
   postImage: {
     width: '100%',
-    height: SCREEN_WIDTH + 140,
-    backgroundColor: theme.colors.borderLight,
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
+    height: '100%',
   },
   videoPlayOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -1755,7 +2007,16 @@ const styles = StyleSheet.create({
   commentSheetRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12, gap: 10 },
   commentSheetAvatar: { width: 36, height: 36, borderRadius: 18 },
   commentSheetAvatarPlaceholder: { width: 36, height: 36, borderRadius: 18, backgroundColor: theme.colors.borderLight, justifyContent: 'center', alignItems: 'center' },
+  commentSheetAvatarPlaceholderGuest: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: theme.colors.guestAvatarBg,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   commentSheetAvatarInitial: { fontSize: 16, fontWeight: '700', color: theme.colors.textSecondary },
+  commentSheetAvatarInitialGuest: { fontSize: 16, fontWeight: '700', color: theme.colors.guestAvatarLetter },
   commentSheetRowBody: { flex: 1, minWidth: 0 },
   commentSheetAuthor: { fontSize: 14, fontWeight: '700', color: theme.colors.text },
   commentSheetText: { fontSize: 14, color: theme.colors.text, marginTop: 2 },
@@ -1767,8 +2028,55 @@ const styles = StyleSheet.create({
   commentSheetInput: { flex: 1, borderWidth: 1, borderColor: theme.colors.borderLight, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, fontSize: 15, color: theme.colors.text, maxHeight: 100 },
   commentSendBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: theme.colors.primary, justifyContent: 'center', alignItems: 'center' },
   commentSendBtnDisabled: { opacity: 0.5 },
-  emptyFeed: { padding: theme.spacing.xl, alignItems: 'center' },
-  emptyFeedText: { color: theme.colors.textMuted },
+  emptyFeed: {
+    padding: theme.spacing.xl,
+    paddingVertical: theme.spacing.xxl,
+    alignItems: 'center',
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.borderLight,
+    marginBottom: theme.spacing.md,
+  },
+  emptyFeedIconWrap: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: `${theme.colors.primary}16`,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: theme.spacing.md,
+  },
+  emptyFeedTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: theme.colors.text,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  emptyFeedText: {
+    fontSize: 14,
+    lineHeight: 21,
+    color: theme.colors.textSecondary,
+    textAlign: 'center',
+    paddingHorizontal: theme.spacing.sm,
+    marginBottom: theme.spacing.lg,
+  },
+  emptyFeedCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: theme.colors.primary,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: theme.radius.md,
+  },
+  emptyFeedCtaText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  emptyFeedCtaSecondary: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+  },
+  emptyFeedCtaSecondaryText: { color: theme.colors.primary, fontWeight: '700', fontSize: 15 },
   showAllBtn: { padding: theme.spacing.md, alignItems: 'center' },
   showAllText: { color: theme.colors.primary, fontWeight: '600', fontSize: 14 },
   fullscreenOverlay: {

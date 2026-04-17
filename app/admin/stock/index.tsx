@@ -44,10 +44,12 @@ type Product = {
   image_url: string | null;
   created_at: string;
   created_by: string | null;
+  organization_id: string;
   category: Category | null;
   creator: { full_name: string | null } | null;
+  organization: { name: string } | null;
 };
-type Alert = { id: string; message: string | null; product_id: string; product?: { name: string } };
+type StockAlertRow = { id: string; message: string | null; product_id: string; product?: { name: string } };
 type LastMovement = { staffName: string; createdAt: string };
 type RecentMovement = {
   id: string;
@@ -65,7 +67,7 @@ export default function StockManagement() {
   const insets = useSafeAreaInsets();
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [alerts, setAlerts] = useState<StockAlertRow[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [search, setSearch] = useState('');
   const [refreshing, setRefreshing] = useState(false);
@@ -77,19 +79,26 @@ export default function StockManagement() {
   const [recentDrawerOpen, setRecentDrawerOpen] = useState(false);
   /** Ürün resmi yoksa son hareketin photo_proof ile göster (admin panelde resim görünsün) */
   const [lastPhotoByProductId, setLastPhotoByProductId] = useState<Record<string, string>>({});
+  const [orgList, setOrgList] = useState<{ id: string; name: string }[]>([]);
+  const [orgFilter, setOrgFilter] = useState<string>('all');
 
   const loadData = async () => {
     setLoadError(null);
     try {
+      const { data: orgsData } = await supabase.from('organizations').select('id, name').order('name');
+      setOrgList((orgsData as { id: string; name: string }[]) ?? []);
+
       const { data: productsData, error: productsError } = await supabase
         .from('stock_products')
-        .select('id, name, barcode, unit, current_stock, min_stock, max_stock, image_url, category_id, created_at, created_by, category:stock_categories(id, name), creator:created_by(full_name)')
+        .select(
+          'id, name, barcode, unit, current_stock, min_stock, max_stock, image_url, category_id, created_at, created_by, organization_id, category:stock_categories(id, name), creator:created_by(full_name), organization:organization_id(name)'
+        )
         .order('name');
       if (productsError) {
         setLoadError(productsError.message || 'Ürünler yüklenemedi');
         setProducts([]);
       } else {
-        setProducts(productsData ?? []);
+        setProducts((productsData ?? []) as unknown as Product[]);
       }
 
       const { data: categoriesData } = await supabase.from('stock_categories').select('id, name').order('name');
@@ -100,7 +109,7 @@ export default function StockManagement() {
           .from('stock_alerts')
           .select('id, message, product_id, product:stock_products(name)')
           .eq('is_resolved', false);
-        setAlerts(alertsData ?? []);
+        setAlerts((alertsData ?? []) as unknown as StockAlertRow[]);
       } catch {
         setAlerts([]);
       }
@@ -114,7 +123,7 @@ export default function StockManagement() {
         for (const m of movementsData ?? []) {
           const pid = (m as { product_id: string }).product_id;
           if (pid && !byProduct[pid]) {
-            const staff = (m as { staff?: { full_name: string | null } }).staff;
+            const staff = (m as unknown as { staff?: { full_name: string | null } }).staff;
             byProduct[pid] = {
               staffName: staff?.full_name ?? '—',
               createdAt: (m as { created_at: string }).created_at,
@@ -132,7 +141,7 @@ export default function StockManagement() {
           .select('id, product_id, movement_type, quantity, created_at, photo_proof, product:stock_products(name), staff:staff_id(full_name)')
           .order('created_at', { ascending: false })
           .limit(12);
-        setRecentMovements((recentData ?? []) as RecentMovement[]);
+        setRecentMovements((recentData ?? []) as unknown as RecentMovement[]);
       } catch {
         setRecentMovements([]);
       }
@@ -224,10 +233,11 @@ export default function StockManagement() {
   };
 
   const filtered = products.filter((p) => {
+    const matchOrg = orgFilter === 'all' || p.organization_id === orgFilter;
     const matchCat = selectedCategory === 'all' || p.category_id === selectedCategory;
     const q = search.trim().toLowerCase();
     const matchSearch = !q || p.name.toLowerCase().includes(q) || (p.barcode != null && p.barcode.toLowerCase().includes(q));
-    return matchCat && matchSearch;
+    return matchOrg && matchCat && matchSearch;
   });
 
   const headerPaddingTop = Platform.OS === 'ios' ? insets.top : insets.top + 8;
@@ -309,6 +319,25 @@ export default function StockManagement() {
         contentContainerStyle={styles.categoriesContent}
         showsHorizontalScrollIndicator={false}
       >
+        <TouchableOpacity
+          style={[styles.chip, orgFilter === 'all' && styles.chipActive]}
+          onPress={() => setOrgFilter('all')}
+          activeOpacity={0.8}
+        >
+          <Text style={[styles.chipText, orgFilter === 'all' && styles.chipTextActive]}>Tüm işletmeler</Text>
+        </TouchableOpacity>
+        {orgList.map((o) => (
+          <TouchableOpacity
+            key={o.id}
+            style={[styles.chip, orgFilter === o.id && styles.chipActive]}
+            onPress={() => setOrgFilter(o.id)}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.chipText, orgFilter === o.id && styles.chipTextActive]} numberOfLines={1}>
+              {o.name}
+            </Text>
+          </TouchableOpacity>
+        ))}
         <TouchableOpacity
           style={[styles.chip, selectedCategory === 'all' && styles.chipActive]}
           onPress={() => setSelectedCategory('all')}
@@ -435,6 +464,11 @@ export default function StockManagement() {
                         Stok: <Text style={[styles.stockHighlight, isLow && styles.stockLabelLow]}>{cur} {p.unit ?? 'adet'}</Text>
                         {isLow && <Text style={styles.kritikBadge}> · Kritik</Text>}
                       </Text>
+                      {p.organization?.name ? (
+                        <Text style={styles.cardOrgTag} numberOfLines={1}>
+                          {p.organization.name}
+                        </Text>
+                      ) : null}
                     </View>
                     <View style={styles.cardImageWrap}>
                       {(p.image_url ?? lastPhotoByProductId[p.id]) ? (
@@ -810,6 +844,12 @@ const styles = StyleSheet.create({
   cardMetaLine: {
     fontSize: 13,
     color: adminTheme.colors.textSecondary,
+    marginTop: 4,
+  },
+  cardOrgTag: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: adminTheme.colors.accent,
     marginTop: 4,
   },
   stockHighlight: {

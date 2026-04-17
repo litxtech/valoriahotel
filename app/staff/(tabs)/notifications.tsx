@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -30,13 +30,14 @@ type NotifRow = {
 export default function StaffNotificationsScreen() {
   const router = useRouter();
   const { staff } = useAuthStore();
+  const scrollRef = useRef<ScrollView>(null);
   const [list, setList] = useState<NotifRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingAll, setDeletingAll] = useState(false);
   const [pushPerm, setPushPerm] = useState<'granted' | 'denied' | 'undetermined' | 'unknown'>('unknown');
   const [enablingPush, setEnablingPush] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (opts?: { scrollToTop?: boolean }) => {
     if (!staff?.id) {
       setLoading(false);
       return;
@@ -59,6 +60,11 @@ export default function StaffNotificationsScreen() {
       .limit(100);
     setList((data as NotifRow[]) ?? []);
     setLoading(false);
+    if (opts?.scrollToTop) {
+      requestAnimationFrame(() => {
+        scrollRef.current?.scrollTo({ y: 0, animated: true });
+      });
+    }
   }, [staff?.id]);
 
   useEffect(() => {
@@ -74,7 +80,7 @@ export default function StaffNotificationsScreen() {
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'notifications', filter: `staff_id=eq.${staff.id}` },
         () => {
-          load();
+          load({ scrollToTop: true });
         }
       )
       .subscribe();
@@ -195,9 +201,11 @@ export default function StaffNotificationsScreen() {
 
   return (
     <ScrollView
+      ref={scrollRef}
       style={styles.container}
       contentContainerStyle={styles.content}
-      refreshControl={<RefreshControl refreshing={loading} onRefresh={load} />}
+      refreshControl={<RefreshControl refreshing={loading} onRefresh={() => load()} />}
+      contentInsetAdjustmentBehavior="automatic"
     >
       <Text style={styles.title}>Bildirimlerim</Text>
       <Text style={styles.subtitle}>Yeni görevler, acil durumlar ve duyurular burada.</Text>

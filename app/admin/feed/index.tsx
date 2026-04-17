@@ -90,7 +90,6 @@ export default function AdminFeedScreen() {
     >
       <AdminCard>
         <View style={styles.sectionHeadRow}>
-          <Text style={styles.sectionTitle}>Paylaşımlar</Text>
           <TouchableOpacity
             onPress={() => router.push('/customer')}
             activeOpacity={0.8}
@@ -174,10 +173,9 @@ const styles = StyleSheet.create({
   sectionHeadRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
     marginBottom: 16,
   },
-  sectionTitle: { fontSize: 18, fontWeight: '700', color: adminTheme.colors.text },
   sectionLinkBtn: { flexDirection: 'row', alignItems: 'center' },
   sectionLink: {
     fontSize: 14,

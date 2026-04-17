@@ -20,7 +20,13 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
 import { adminTheme } from '@/constants/adminTheme';
-import { shareContractPdf, buildContractHtml, openContractPrintWindow, type GuestForPdf } from '@/lib/contractPdf';
+import {
+  shareContractPdf,
+  buildContractHtml,
+  fetchContractPdfAppearance,
+  openContractPrintWindow,
+  type GuestForPdf,
+} from '@/lib/contractPdf';
 
 type Row = {
   id: string;
@@ -167,9 +173,9 @@ export function AllContractsScreen() {
     }
     setDetailLoading(true);
     try {
-      const guest = await loadGuestForPdf(item.guest_id);
+      const [guest, appearance] = await Promise.all([loadGuestForPdf(item.guest_id), fetchContractPdfAppearance()]);
       setDetailGuest(guest ?? null);
-      if (guest) setPreviewHtml(buildContractHtml(guest));
+      if (guest) setPreviewHtml(buildContractHtml(guest, appearance));
     } finally {
       setDetailLoading(false);
     }
@@ -177,7 +183,7 @@ export function AllContractsScreen() {
 
   const openPreviewWindow = () => {
     if (Platform.OS === 'web') {
-      if (detailGuest) openContractPrintWindow(detailGuest);
+      if (detailGuest) void openContractPrintWindow(detailGuest);
       else if (previewHtml && typeof window !== 'undefined') {
         const w = window.open('', '_blank', 'noopener');
         if (w) {

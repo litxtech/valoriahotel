@@ -15,6 +15,7 @@ import { theme } from '@/constants/theme';
 import { useAuthStore } from '@/stores/authStore';
 import { staffGetOrCreateDirectConversation } from '@/lib/messagingApi';
 import { CachedImage } from '@/components/CachedImage';
+import { sortStaffAdminFirst } from '@/lib/sortStaffAdminFirst';
 
 type GuestRow = {
   id: string;
@@ -97,12 +98,9 @@ export default function StaffNewChatScreen() {
       })
       .filter((x) => matches(`${x.name} ${x.sub}`));
 
-    const staffItems: RowItem[] = [...staffList]
-      .sort((a, b) => {
-        const aAdmin = (a.role === 'admin') ? 0 : 1;
-        const bAdmin = (b.role === 'admin') ? 0 : 1;
-        return aAdmin - bAdmin || (a.full_name || '').localeCompare(b.full_name || '');
-      })
+    const staffItems: RowItem[] = sortStaffAdminFirst(staffList, (a, b) =>
+      (a.full_name || '').localeCompare(b.full_name || '', 'tr')
+    )
       .map((s) => ({
         id: s.id,
         name: s.full_name || 'Personel',

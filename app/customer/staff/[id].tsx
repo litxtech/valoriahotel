@@ -12,8 +12,11 @@ import {
   Pressable,
   TextInput,
   Alert,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useTranslation } from 'react-i18next';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
@@ -26,6 +29,10 @@ import { AvatarWithBadge, StaffNameWithBadge } from '@/components/VerifiedBadge'
 import { CachedImage } from '@/components/CachedImage';
 import { ImagePreviewModal } from '@/components/ImagePreviewModal';
 import { blockUserForGuest, getHiddenUsersForGuest } from '@/lib/userBlocks';
+import type { HubReview } from '@/components/StaffEvaluationHub';
+import { StaffEvaluationHub, StaffReviewsFullModal } from '@/components/StaffEvaluationHub';
+import { resolveStaffEvaluation } from '@/lib/staffEvaluation';
+import { STAFF_SOCIAL_KEYS, staffSocialOpenUrl, type StaffSocialKey } from '@/lib/staffSocialLinks';
 
 const COVER_HEIGHT = 260;
 const AVATAR_SIZE = 116;
@@ -56,8 +63,14 @@ type StaffDetail = {
   whatsapp: string | null;
   shift?: { start_time: string; end_time: string } | null;
   role?: string | null;
-  show_gold_profile_border?: boolean | null;
   verification_badge?: 'blue' | 'yellow' | null;
+  evaluation_score?: number | null;
+  evaluation_discipline?: number | null;
+  evaluation_communication?: number | null;
+  evaluation_speed?: number | null;
+  evaluation_responsibility?: number | null;
+  evaluation_insight?: string | null;
+  social_links?: Record<string, string> | null;
 };
 
 type Review = {
@@ -65,15 +78,19 @@ type Review = {
   rating: number;
   comment: string | null;
   created_at: string;
-  guest?: { full_name: string | null; room_number?: string | null } | null;
+  stay_room_label?: string | null;
+  stay_nights_label?: string | null;
+  guest?: { full_name: string | null; room_number?: string | null; photo_url?: string | null } | null;
 };
 
-const CUSTOMER_REVIEW_LIMIT = 5;
+const CUSTOMER_REVIEW_LIMIT = 50;
 
 export default function StaffProfileScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const params = useLocalSearchParams<{ id?: string | string[] }>();
+  const id = typeof params.id === 'string' ? params.id : Array.isArray(params.id) ? params.id[0] : undefined;
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { t } = useTranslation();
   const { user } = useAuthStore();
   const { appToken, setAppToken } = useGuestMessagingStore();
   const [staff, setStaff] = useState<StaffDetail | null>(null);
@@ -86,6 +103,8 @@ export default function StaffProfileScreen() {
   const [reviewsModalVisible, setReviewsModalVisible] = useState(false);
   const [rateStars, setRateStars] = useState(0);
   const [rateComment, setRateComment] = useState('');
+  const [rateStayRoom, setRateStayRoom] = useState('');
+  const [rateStayNights, setRateStayNights] = useState('');
   const [submittingReview, setSubmittingReview] = useState(false);
   const [myReview, setMyReview] = useState<Review | null>(null);
   const [profileMenuVisible, setProfileMenuVisible] = useState(false);
@@ -122,6 +141,7 @@ export default function StaffProfileScreen() {
         };
       };
       const c = raw.profile_contact;
+      const rawSocial = (raw as { social_links?: Record<string, string> | null }).social_links;
       const staffData: StaffDetail = {
         ...raw,
         shift: undefined,
@@ -131,6 +151,7 @@ export default function StaffProfileScreen() {
         show_phone_to_guest: c?.show_phone_to_guest ?? raw.show_phone_to_guest,
         show_email_to_guest: c?.show_email_to_guest ?? raw.show_email_to_guest,
         show_whatsapp_to_guest: c?.show_whatsapp_to_guest ?? raw.show_whatsapp_to_guest,
+        social_links: rawSocial && typeof rawSocial === 'object' ? rawSocial : null,
       };
       setStaff(staffData);
       if (s.shift_id) {
@@ -143,7 +164,7 @@ export default function StaffProfileScreen() {
       }
       const { data: r } = await supabase
         .from('staff_reviews')
-        .select('id, rating, comment, created_at, guest_id')
+        .select('id, rating, comment, created_at, guest_id, stay_room_label, stay_nights_label')
         .eq('staff_id', id)
         .order('created_at', { ascending: false })
         .limit(CUSTOMER_REVIEW_LIMIT);
@@ -152,9 +173,9 @@ export default function StaffProfileScreen() {
         const guestIds = [...new Set(reviewRows.map((x) => x.guest_id).filter(Boolean))] as string[];
         const { data: guests } = await supabase
           .from('guests')
-          .select('id, full_name, room_id')
+          .select('id, full_name, room_id, photo_url')
           .in('id', guestIds);
-        const guestList = (guests ?? []) as { id: string; full_name: string | null; room_id: string | null }[];
+        const guestList = (guests ?? []) as { id: string; full_name: string | null; room_id: string | null; photo_url: string | null }[];
         const roomIds = [...new Set(guestList.map((g) => g.room_id).filter(Boolean))] as string[];
         let roomMap = new Map<string, string>();
         if (roomIds.length > 0) {
@@ -170,6 +191,7 @@ export default function StaffProfileScreen() {
             {
               full_name: g.full_name,
               room_number: g.room_id ? roomMap.get(g.room_id) ?? null : null,
+              photo_url: g.photo_url,
             },
           ])
         );
@@ -179,40 +201,49 @@ export default function StaffProfileScreen() {
             rating: x.rating,
             comment: x.comment,
             created_at: x.created_at,
+            stay_room_label: x.stay_room_label,
+            stay_nights_label: x.stay_nights_label,
             guest: x.guest_id ? guestMap.get(x.guest_id) ?? null : null,
           }))
         );
       } else {
-        setReviews(reviewRows.map(({ guest_id: _, ...rest }) => rest));
+        setReviews(
+          reviewRows.map(({ guest_id: _, ...rest }) => ({
+            ...rest,
+            stay_room_label: rest.stay_room_label,
+            stay_nights_label: rest.stay_nights_label,
+          }))
+        );
       }
-      // Mevcut kullanıcının bu çalışana verdiği puan var mı? (bir kullanıcı bir çalışana sadece bir kez puan verebilir)
-      const email = (user?.email ?? user?.user_metadata?.email ?? '').toString().trim();
-      if (email) {
-        const { data: guest } = await supabase
-          .from('guests')
-          .select('id')
-          .eq('email', email)
+      // Oturum misafir kaydı (Apple/Google e-postası guests’ta farklı olabilir — RPC tek kaynak)
+      const { data: sessionData } = await supabase.auth.getSession();
+      const guestFromAuth = await getOrCreateGuestForCaller(sessionData?.session?.user ?? null);
+      let viewerGuestId: string | null = guestFromAuth?.guest_id ?? null;
+      if (!viewerGuestId) {
+        const email = (user?.email ?? user?.user_metadata?.email ?? '').toString().trim();
+        if (email) {
+          const { data: guest } = await supabase.from('guests').select('id').eq('email', email).limit(1).maybeSingle();
+          viewerGuestId = guest?.id ?? null;
+        }
+      }
+      if (viewerGuestId) {
+        const { data: existing } = await supabase
+          .from('staff_reviews')
+          .select('id, rating, comment, created_at, stay_room_label, stay_nights_label')
+          .eq('staff_id', id)
+          .eq('guest_id', viewerGuestId)
           .limit(1)
           .maybeSingle();
-        if (guest?.id) {
-          const { data: existing } = await supabase
-            .from('staff_reviews')
-            .select('id, rating, comment, created_at')
-            .eq('staff_id', id)
-            .eq('guest_id', guest.id)
-            .limit(1)
-            .maybeSingle();
-          if (existing) {
-            setMyReview({
-              id: existing.id,
-              rating: existing.rating,
-              comment: existing.comment,
-              created_at: existing.created_at,
-              guest: null,
-            });
-          } else {
-            setMyReview(null);
-          }
+        if (existing) {
+          setMyReview({
+            id: existing.id,
+            rating: existing.rating,
+            comment: existing.comment,
+            created_at: existing.created_at,
+            stay_room_label: existing.stay_room_label,
+            stay_nights_label: existing.stay_nights_label,
+            guest: null,
+          });
         } else {
           setMyReview(null);
         }
@@ -220,7 +251,7 @@ export default function StaffProfileScreen() {
         setMyReview(null);
       }
       setLoading(false);
-  }, [id, user?.email, user?.user_metadata?.email]);
+  }, [id, user?.id, user?.email, user?.user_metadata?.email]);
 
   useEffect(() => {
     loadStaff();
@@ -254,9 +285,11 @@ export default function StaffProfileScreen() {
   };
 
   const openRateModal = () => {
-    if (myReview) return; // Zaten puan verdiyse modal açma
+    if (myReview) return;
     setRateStars(0);
     setRateComment('');
+    setRateStayRoom('');
+    setRateStayNights('');
     setRateModalVisible(true);
   };
 
@@ -264,38 +297,56 @@ export default function StaffProfileScreen() {
     if (!id || rateStars < 1 || rateStars > 5) return;
     setSubmittingReview(true);
     try {
-      let guestId: string | null = null;
-      const email = (user?.email ?? user?.user_metadata?.email ?? '').toString().trim();
-      if (email) {
-        const { data: guest } = await supabase
-          .from('guests')
-          .select('id')
-          .eq('email', email)
-          .limit(1)
-          .maybeSingle();
-        if (guest?.id) guestId = guest.id;
+      await supabase.auth.refreshSession();
+      const guestRow = await getOrCreateGuestForCurrentSession();
+      if (!guestRow?.guest_id) {
+        Alert.alert(
+          t('error'),
+          t('reviewLoginRequired')
+        );
+        setSubmittingReview(false);
+        return;
       }
-      const { error } = await supabase.from('staff_reviews').insert({
+      const guestId = guestRow.guest_id;
+      const roomTrim = rateStayRoom.trim();
+      const nightsTrim = rateStayNights.trim();
+      const basePayload = {
         staff_id: id,
         guest_id: guestId,
         rating: rateStars,
         comment: rateComment.trim() || null,
-      });
+      };
+      const fullPayload = {
+        ...basePayload,
+        stay_room_label: roomTrim || null,
+        stay_nights_label: nightsTrim || null,
+      };
+      let { error } = await supabase.from('staff_reviews').insert(fullPayload);
+      const msg = String(error?.message ?? '');
+      if (
+        error &&
+        (msg.includes('stay_room_label') ||
+          msg.includes('stay_nights_label') ||
+          msg.includes('schema cache') ||
+          error.code === 'PGRST204')
+      ) {
+        ({ error } = await supabase.from('staff_reviews').insert(basePayload));
+      }
       if (error) {
         if (error.code === '23505') {
           setRateModalVisible(false);
-          setSubmittingReview(false);
-          setMyReview(null);
           await loadStaff();
-          return; // Unique constraint: zaten puan vermiş, listeyi güncelle
+          Alert.alert(t('error'), t('reviewAlreadySubmitted'));
+          setSubmittingReview(false);
+          return;
         }
         throw error;
       }
       setRateModalVisible(false);
       await loadStaff();
-    } catch {
-      setSubmittingReview(false);
-      return;
+    } catch (e) {
+      const msg = e && typeof e === 'object' && 'message' in e ? String((e as Error).message) : String(e);
+      Alert.alert(t('error'), msg || t('reviewSubmitFailed'));
     }
     setSubmittingReview(false);
   };
@@ -358,11 +409,9 @@ export default function StaffProfileScreen() {
   const showPhone = (staff.show_phone_to_guest !== false) && hasPhone;
   const showEmail = (staff.show_email_to_guest !== false) && hasEmail;
   const showWhatsApp = (staff.show_whatsapp_to_guest !== false) && hasWhatsApp;
-  const showGoldBorder =
-    staff.role === 'admin' && (staff.show_gold_profile_border ?? false);
 
   return (
-    <View style={[styles.container, showGoldBorder && styles.containerGoldBorder]}>
+    <View style={styles.container}>
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
       <Modal
         visible={profileMenuVisible}
@@ -395,7 +444,6 @@ export default function StaffProfileScreen() {
         >
           <Ionicons name="ellipsis-horizontal" size={22} color={theme.colors.white} />
         </TouchableOpacity>
-        <View style={styles.coverGradient} pointerEvents="none" />
         <TouchableOpacity
           style={styles.coverImageClip}
           activeOpacity={1}
@@ -430,20 +478,6 @@ export default function StaffProfileScreen() {
         </View>
       </View>
 
-      <TouchableOpacity
-        style={styles.section}
-        onPress={() => setReviewsModalVisible(true)}
-        activeOpacity={0.8}
-      >
-        <Text style={styles.sectionTitle}>⭐ Puan</Text>
-        <Text style={styles.rating}>
-          {staff.average_rating != null && staff.average_rating > 0
-            ? `${Number(staff.average_rating).toFixed(1)} (${staff.total_reviews ?? 0} değerlendirme)`
-            : `Henüz puan yok (${staff.total_reviews ?? 0} değerlendirme)`}
-        </Text>
-        <Text style={styles.reviewsTapHint}>Değerlendirmeleri görüntüle</Text>
-      </TouchableOpacity>
-
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>📋 Temel bilgiler</Text>
         <View style={styles.card}>
@@ -469,6 +503,40 @@ export default function StaffProfileScreen() {
             />
           )}
         </View>
+      </View>
+
+      <View style={styles.section}>
+        <StaffEvaluationHub
+          resolved={resolveStaffEvaluation({
+            id: staff.id,
+            evaluation_score: staff.evaluation_score,
+            evaluation_discipline: staff.evaluation_discipline,
+            evaluation_communication: staff.evaluation_communication,
+            evaluation_speed: staff.evaluation_speed,
+            evaluation_responsibility: staff.evaluation_responsibility,
+            evaluation_insight: staff.evaluation_insight,
+            average_rating: staff.average_rating,
+          })}
+          averageRating={staff.average_rating}
+          totalReviews={staff.total_reviews}
+          reviews={reviews as HubReview[]}
+          previewLimit={3}
+          onOpenAllReviews={() => setReviewsModalVisible(true)}
+          formatReviewDate={formatReviewDate}
+          headerActions={
+            myReview ? (
+              <View style={styles.evaluateDoneBanner}>
+                <Ionicons name="checkmark-circle" size={22} color={theme.colors.success} />
+                <Text style={styles.evaluateDoneText}>{t('evaluateStaffDone')}</Text>
+              </View>
+            ) : (
+              <TouchableOpacity style={styles.evaluatePrimaryBtn} onPress={openRateModal} activeOpacity={0.88}>
+                <Ionicons name="star" size={22} color={theme.colors.white} />
+                <Text style={styles.evaluatePrimaryBtnText}>{t('evaluateStaffButton')}</Text>
+              </TouchableOpacity>
+            )
+          }
+        />
       </View>
 
       {staff.specialties?.length ? (
@@ -513,33 +581,6 @@ export default function StaffProfileScreen() {
         </View>
       ) : null}
 
-      {reviews.length > 0 && (
-        <TouchableOpacity
-          style={styles.section}
-          onPress={() => setReviewsModalVisible(true)}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.sectionTitle}>💬 Son değerlendirmeler</Text>
-          <View style={styles.card}>
-            {reviews.slice(0, 2).map((r) => (
-              <View key={r.id} style={styles.reviewCard}>
-                <Text style={styles.reviewMeta}>
-                  {r.guest?.full_name || 'Misafir'}
-                  {r.guest?.room_number ? ` (Oda ${r.guest.room_number})` : ''} · {formatReviewDate(r.created_at)}
-                </Text>
-                <Text style={styles.reviewStars}>{'★'.repeat(r.rating)}</Text>
-                {r.comment ? (
-                  <Text style={styles.reviewComment} numberOfLines={1}>"{r.comment}"</Text>
-                ) : null}
-              </View>
-            ))}
-            {reviews.length > 2 && (
-              <Text style={styles.reviewsMore}>+{reviews.length - 2} değerlendirme daha — tıklayın</Text>
-            )}
-          </View>
-        </TouchableOpacity>
-      )}
-
       <View style={styles.avatarActionsRow}>
         {showPhone && (
           <TouchableOpacity
@@ -570,6 +611,38 @@ export default function StaffProfileScreen() {
             <Ionicons name="mail" size={20} color={theme.colors.white} />
           </TouchableOpacity>
         )}
+        {STAFF_SOCIAL_KEYS.map((key) => {
+          const raw = staff.social_links?.[key]?.trim();
+          if (!raw) return null;
+          const href = staffSocialOpenUrl(key as StaffSocialKey, raw);
+          if (!href) return null;
+          const icon =
+            key === 'instagram'
+              ? ('logo-instagram' as const)
+              : key === 'facebook'
+                ? ('logo-facebook' as const)
+                : key === 'linkedin'
+                  ? ('logo-linkedin' as const)
+                  : ('logo-twitter' as const);
+          const circleStyle =
+            key === 'instagram'
+              ? styles.avatarActionInstagram
+              : key === 'facebook'
+                ? styles.avatarActionFacebook
+                : key === 'linkedin'
+                  ? styles.avatarActionLinkedin
+                  : styles.avatarActionX;
+          return (
+            <TouchableOpacity
+              key={key}
+              onPress={() => Linking.openURL(href)}
+              style={[styles.avatarActionCircle, circleStyle]}
+              activeOpacity={0.8}
+            >
+              <Ionicons name={icon} size={20} color={theme.colors.white} />
+            </TouchableOpacity>
+          );
+        })}
         <TouchableOpacity
           onPress={onMessage}
           style={[styles.avatarActionCircle, styles.avatarActionMessage]}
@@ -578,19 +651,6 @@ export default function StaffProfileScreen() {
         >
           <Ionicons name="chatbubble-outline" size={20} color={theme.colors.white} />
         </TouchableOpacity>
-        {myReview ? (
-          <View style={[styles.avatarActionCircle, styles.avatarActionStarDone]}>
-            <Ionicons name="star" size={20} color={theme.colors.primary} />
-          </View>
-        ) : (
-          <TouchableOpacity
-            onPress={openRateModal}
-            style={[styles.avatarActionCircle, styles.avatarActionStar]}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="star-outline" size={20} color={theme.colors.primary} />
-          </TouchableOpacity>
-        )}
       </View>
       <View style={styles.bottomPad} />
 
@@ -605,74 +665,34 @@ export default function StaffProfileScreen() {
         onClose={() => setAvatarModalVisible(false)}
       />
 
-      <Modal
+      <StaffReviewsFullModal
         visible={reviewsModalVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setReviewsModalVisible(false)}
-      >
-        <Pressable
-          style={styles.rateModalOverlay}
-          onPress={() => setReviewsModalVisible(false)}
-        >
-          <Pressable style={styles.reviewsModalBox} onPress={() => {}}>
-            <Text style={styles.reviewsModalTitle}>💬 Değerlendirmeler</Text>
-            <Text style={styles.reviewsModalSubtitle}>
-              {staff?.full_name || 'Personel'} — {reviews.length} değerlendirme
-            </Text>
-            <ScrollView style={styles.reviewsModalList} showsVerticalScrollIndicator={false}>
-              {reviews.length === 0 ? (
-                <Text style={styles.reviewsModalEmpty}>Henüz değerlendirme yok.</Text>
-              ) : (
-                reviews.map((r) => (
-                  <View key={r.id} style={styles.reviewsModalItem}>
-                    <View style={styles.reviewsModalItemHeader}>
-                      <Text style={styles.reviewsModalItemStars}>
-                        {'★'.repeat(r.rating)}{'☆'.repeat(5 - r.rating)}
-                      </Text>
-                      <Text style={styles.reviewsModalItemDate}>{formatReviewDate(r.created_at)}</Text>
-                    </View>
-                    <Text style={styles.reviewsModalItemMeta}>
-                      {r.guest?.full_name || 'Misafir'}
-                      {r.guest?.room_number ? ` · Oda ${r.guest.room_number}` : ''}
-                    </Text>
-                    {r.comment ? (
-                      <Text style={styles.reviewsModalItemComment}>"{r.comment}"</Text>
-                    ) : (
-                      <Text style={styles.reviewsModalItemNoComment}>Yorum yok</Text>
-                    )}
-                  </View>
-                ))
-              )}
-            </ScrollView>
-            <View style={styles.reviewsModalActions}>
+        onClose={() => setReviewsModalVisible(false)}
+        staffName={staff?.full_name || 'Personel'}
+        reviews={reviews as HubReview[]}
+        formatReviewDate={formatReviewDate}
+        footerExtra={
+          <View style={styles.reviewsModalActions}>
+            {myReview ? (
+              <View style={[styles.reviewsModalCloseBtn, styles.reviewsModalRateDone, { flex: 1 }]}>
+                <Ionicons name="star" size={18} color={theme.colors.primary} />
+                <Text style={styles.reviewsModalRateDoneText}>Puan verdiniz</Text>
+              </View>
+            ) : (
               <TouchableOpacity
-                style={styles.reviewsModalCloseBtn}
-                onPress={() => setReviewsModalVisible(false)}
+                style={[styles.reviewsModalCloseBtn, styles.reviewsModalRateBtn, { flex: 1 }]}
+                onPress={() => {
+                  setReviewsModalVisible(false);
+                  openRateModal();
+                }}
               >
-                <Text style={styles.reviewsModalCloseText}>Kapat</Text>
+                <Ionicons name="star-outline" size={18} color={theme.colors.white} />
+                <Text style={styles.reviewsModalRateText}>Puan ver</Text>
               </TouchableOpacity>
-              {myReview ? (
-                <View style={[styles.reviewsModalCloseBtn, styles.reviewsModalRateDone]}>
-                  <Ionicons name="star" size={18} color={theme.colors.primary} />
-                  <Text style={styles.reviewsModalRateDoneText}>Puan verdiniz</Text>
-                </View>
-              ) : (
-                <TouchableOpacity
-                  style={[styles.reviewsModalCloseBtn, styles.reviewsModalRateBtn]}
-                  onPress={() => {
-                    setReviewsModalVisible(false);
-                    openRateModal();
-                  }}
-                >
-                  <Ionicons name="star-outline" size={18} color={theme.colors.white} />
-                  <Text style={styles.reviewsModalRateText}>Puan ver</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
+            )}
+          </View>
+        }
+      />
 
       <Modal
         visible={rateModalVisible}
@@ -680,62 +700,97 @@ export default function StaffProfileScreen() {
         animationType="fade"
         onRequestClose={() => !submittingReview && setRateModalVisible(false)}
       >
-        <Pressable
-          style={styles.rateModalOverlay}
-          onPress={() => !submittingReview && setRateModalVisible(false)}
+        <KeyboardAvoidingView
+          style={styles.rateModalKbRoot}
+          behavior="padding"
+          keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + 8 : 0}
         >
-          <Pressable style={styles.rateModalBox} onPress={() => {}}>
-            <Text style={styles.rateModalTitle}>Puan ver</Text>
-            <Text style={styles.rateModalSubtitle}>{staff?.full_name || 'Personel'} hakkında değerlendirmeniz</Text>
-            <View style={styles.starRow}>
-              {[1, 2, 3, 4, 5].map((n) => (
-                <TouchableOpacity
-                  key={n}
-                  onPress={() => setRateStars(n)}
-                  style={styles.starBtn}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons
-                    name={rateStars >= n ? 'star' : 'star-outline'}
-                    size={36}
-                    color={theme.colors.primary}
-                  />
-                </TouchableOpacity>
-              ))}
-            </View>
-            <TextInput
-              style={styles.rateCommentInput}
-              placeholder="Yorum (isteğe bağlı)"
-              placeholderTextColor={theme.colors.textMuted}
-              value={rateComment}
-              onChangeText={setRateComment}
-              multiline
-              numberOfLines={3}
-              editable={!submittingReview}
+          <View style={styles.rateModalOuter}>
+            <Pressable
+              style={styles.rateModalBackdrop}
+              onPress={() => !submittingReview && setRateModalVisible(false)}
             />
-            <View style={styles.rateModalActions}>
-              <TouchableOpacity
-                style={[styles.rateModalBtn, styles.rateModalBtnCancel]}
-                onPress={() => !submittingReview && setRateModalVisible(false)}
-                disabled={submittingReview}
-              >
-                <Text style={styles.rateModalBtnCancelText}>İptal</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.rateModalBtn, styles.rateModalBtnSubmit]}
-                onPress={submitReview}
-                disabled={submittingReview || rateStars < 1}
-                activeOpacity={0.8}
-              >
-                {submittingReview ? (
-                  <ActivityIndicator size="small" color={theme.colors.white} />
-                ) : (
-                  <Text style={styles.rateModalBtnSubmitText}>Gönder</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </Pressable>
-        </Pressable>
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.rateModalScrollContent}
+              bounces={false}
+              nestedScrollEnabled
+            >
+              <Pressable onPress={() => {}}>
+                <View style={styles.rateModalBox}>
+                  <Text style={styles.rateModalTitle}>{t('reviewFormTitle')}</Text>
+                  <Text style={styles.rateModalSubtitle}>{staff?.full_name || 'Personel'}</Text>
+                  <View style={styles.starRow}>
+                    {[1, 2, 3, 4, 5].map((n) => (
+                      <TouchableOpacity
+                        key={n}
+                        onPress={() => setRateStars(n)}
+                        style={styles.starBtn}
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons
+                          name={rateStars >= n ? 'star' : 'star-outline'}
+                          size={36}
+                          color={theme.colors.primary}
+                        />
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  <TextInput
+                    style={styles.rateMetaInput}
+                    placeholder={t('reviewStayRoomPlaceholder')}
+                    placeholderTextColor={theme.colors.textMuted}
+                    value={rateStayRoom}
+                    onChangeText={setRateStayRoom}
+                    editable={!submittingReview}
+                  />
+                  <TextInput
+                    style={styles.rateMetaInput}
+                    placeholder={t('reviewStayNightsPlaceholder')}
+                    placeholderTextColor={theme.colors.textMuted}
+                    value={rateStayNights}
+                    onChangeText={setRateStayNights}
+                    editable={!submittingReview}
+                  />
+                  <TextInput
+                    style={styles.rateCommentInput}
+                    placeholder={t('reviewCommentOptional')}
+                    placeholderTextColor={theme.colors.textMuted}
+                    value={rateComment}
+                    onChangeText={setRateComment}
+                    multiline
+                    scrollEnabled
+                    textAlignVertical="top"
+                    editable={!submittingReview}
+                  />
+                  <View style={styles.rateModalActions}>
+                    <TouchableOpacity
+                      style={[styles.rateModalBtn, styles.rateModalBtnCancel]}
+                      onPress={() => !submittingReview && setRateModalVisible(false)}
+                      disabled={submittingReview}
+                    >
+                      <Text style={styles.rateModalBtnCancelText}>İptal</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.rateModalBtn, styles.rateModalBtnSubmit]}
+                      onPress={submitReview}
+                      disabled={submittingReview || rateStars < 1}
+                      activeOpacity={0.8}
+                    >
+                      {submittingReview ? (
+                        <ActivityIndicator size="small" color={theme.colors.white} />
+                      ) : (
+                        <Text style={styles.rateModalBtnSubmitText}>Gönder</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </Pressable>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
       </ScrollView>
     </View>
@@ -762,16 +817,8 @@ function formatReviewDate(iso: string) {
   return d.toLocaleDateString('tr-TR');
 }
 
-const GOLD_COLOR = '#D4AF37';
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.backgroundSecondary },
-  containerGoldBorder: {
-    borderLeftWidth: 4,
-    borderRightWidth: 4,
-    borderTopWidth: 4,
-    borderColor: GOLD_COLOR,
-  },
   scroll: { flex: 1 },
   scrollContent: { paddingBottom: 32 },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
@@ -798,15 +845,6 @@ const styles = StyleSheet.create({
   },
   coverBackBtn: { left: 16 },
   coverMenuBtn: { right: 16 },
-  coverGradient: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 100,
-    zIndex: 2,
-    backgroundColor: 'rgba(0,0,0,0.2)',
-  },
   coverImageClip: {
     position: 'absolute',
     top: 0,
@@ -859,6 +897,40 @@ const styles = StyleSheet.create({
   onlineText: { fontSize: 13, color: theme.colors.textMuted },
   section: { paddingHorizontal: theme.spacing.lg, marginTop: theme.spacing.lg },
   sectionTitle: { fontSize: 16, fontWeight: '700', color: theme.colors.text, marginBottom: 8 },
+  evaluatePrimaryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    backgroundColor: theme.colors.primary,
+    paddingVertical: 14,
+    borderRadius: 14,
+    ...theme.shadows.sm,
+  },
+  evaluatePrimaryBtnText: { color: theme.colors.white, fontSize: 16, fontWeight: '800' },
+  evaluateDoneBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: theme.colors.success + '22',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: theme.colors.success + '55',
+  },
+  evaluateDoneText: { flex: 1, fontSize: 14, fontWeight: '600', color: theme.colors.text },
+  rateMetaInput: {
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    fontSize: 14,
+    marginBottom: 10,
+    color: theme.colors.text,
+    backgroundColor: theme.colors.surface,
+  },
   card: {
     backgroundColor: theme.colors.surface,
     borderRadius: 20,
@@ -883,6 +955,7 @@ const styles = StyleSheet.create({
   reviewsMore: { fontSize: 12, color: theme.colors.textMuted, marginTop: 8, textAlign: 'center' },
   avatarActionsRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 12,
@@ -900,9 +973,11 @@ const styles = StyleSheet.create({
   avatarActionPhone: { backgroundColor: theme.colors.primary },
   avatarActionWhatsApp: { backgroundColor: '#25D366' },
   avatarActionMail: { backgroundColor: theme.colors.accent },
+  avatarActionInstagram: { backgroundColor: '#E4405F' },
+  avatarActionFacebook: { backgroundColor: '#1877F2' },
+  avatarActionLinkedin: { backgroundColor: '#0A66C2' },
+  avatarActionX: { backgroundColor: '#0f1419' },
   avatarActionMessage: { backgroundColor: theme.colors.primary },
-  avatarActionStar: { backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.primary },
-  avatarActionStarDone: { backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.primary },
   bottomPad: { height: 32 },
   reviewsModalRateDone: { flex: 1, paddingVertical: 12, borderRadius: theme.radius.md, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6, backgroundColor: theme.colors.borderLight },
   reviewsModalRateDoneText: { fontSize: 15, fontWeight: '600', color: theme.colors.text },
@@ -954,19 +1029,27 @@ const styles = StyleSheet.create({
   },
   profileMenuItem: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 12 },
   profileMenuItemText: { color: theme.colors.error, fontSize: 15, fontWeight: '600' },
-  rateModalOverlay: {
-    flex: 1,
+  rateModalKbRoot: { flex: 1 },
+  rateModalOuter: { flex: 1, justifyContent: 'flex-end' },
+  rateModalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
+  },
+  rateModalScrollContent: {
+    paddingHorizontal: 24,
+    paddingTop: 24,
+    paddingBottom: 32,
+    flexGrow: 1,
+    justifyContent: 'flex-end',
   },
   rateModalBox: {
     width: '100%',
     maxWidth: 360,
+    alignSelf: 'center',
     backgroundColor: theme.colors.surface,
     borderRadius: theme.radius.lg,
     padding: theme.spacing.xl,
+    marginBottom: 8,
     ...theme.shadows.lg,
   },
   rateModalTitle: { fontSize: 20, fontWeight: '700', color: theme.colors.text, marginBottom: 4 },
@@ -981,7 +1064,8 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     fontSize: 15,
     color: theme.colors.text,
-    minHeight: 80,
+    minHeight: 100,
+    maxHeight: 160,
     textAlignVertical: 'top',
     marginBottom: theme.spacing.lg,
   },

@@ -1,9 +1,10 @@
 import { useEffect, useCallback } from 'react';
 import { View, TouchableOpacity, Platform, StyleSheet, Text } from 'react-native';
-import { Stack, useRouter, useNavigation, useFocusEffect } from 'expo-router';
+import { Stack, useRouter, useNavigation, useFocusEffect, usePathname } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '@/stores/authStore';
+import { canAccessAdminShell, isGorevAtaOnlyUser } from '@/lib/staffPermissions';
 import { useStaffNotificationStore } from '@/stores/staffNotificationStore';
 import { adminTheme } from '@/constants/adminTheme';
 import { Ionicons } from '@expo/vector-icons';
@@ -12,6 +13,7 @@ export default function AdminLayout() {
   const { t } = useTranslation();
   const router = useRouter();
   const navigation = useNavigation();
+  const pathname = usePathname();
   const insets = useSafeAreaInsets();
 
   const handleAdminBack = () => {
@@ -29,7 +31,8 @@ export default function AdminLayout() {
   useFocusEffect(
     useCallback(() => {
       refreshNotifications();
-    }, [refreshNotifications])
+      loadSession();
+    }, [refreshNotifications, loadSession])
   );
 
   const renderHeaderRight = () => (
@@ -52,11 +55,21 @@ export default function AdminLayout() {
 
   useEffect(() => {
     if (loading) return;
-    if (!staff || staff.role !== 'admin') {
+    if (!staff || !canAccessAdminShell(staff)) {
       router.replace('/');
       return;
     }
   }, [loading, staff]);
+
+  /** Sadece görev yetkisi olan personel tam paneli göremez; yalnızca /admin/tasks* */
+  useEffect(() => {
+    if (loading || !staff) return;
+    if (!isGorevAtaOnlyUser(staff)) return;
+    const p = pathname ?? '';
+    if (!p.startsWith('/admin/tasks')) {
+      router.replace('/admin/tasks');
+    }
+  }, [loading, staff, pathname, router]);
 
   const headerOpts = {
     headerStyle: {
@@ -100,10 +113,19 @@ export default function AdminLayout() {
       <Stack.Screen name="guests/[id]" options={{ title: t('adminGuestDetail'), headerRight: renderHeaderRight }} />
       <Stack.Screen name="checkin" options={{ title: t('adminCheckin'), headerRight: renderHeaderRight }} />
       <Stack.Screen name="housekeeping" options={{ title: t('adminHousekeeping'), headerRight: renderHeaderRight }} />
+      <Stack.Screen name="tasks/index" options={{ title: 'Personel görevleri', headerRight: renderHeaderRight }} />
+      <Stack.Screen name="tasks/assign" options={{ title: 'Görev ata', headerRight: renderHeaderRight }} />
       <Stack.Screen name="report" options={{ title: t('adminReport'), headerRight: renderHeaderRight }} />
       <Stack.Screen name="stays/index" options={{ title: 'Konaklama geçmişi', headerRight: renderHeaderRight }} />
+      <Stack.Screen name="sales/index" options={{ title: 'Satış & Komisyon', headerRight: renderHeaderRight }} />
+      <Stack.Screen name="sales/new" options={{ title: 'Yeni satış kaydı', headerRight: renderHeaderRight }} />
+      <Stack.Screen name="sales/[id]" options={{ title: 'Satış detayı', headerRight: renderHeaderRight }} />
       <Stack.Screen name="hmb-reports/index" options={{ title: t('adminHmbReports'), headerRight: renderHeaderRight }} />
       <Stack.Screen name="contracts" options={{ title: t('adminContracts'), headerShown: false }} />
+      <Stack.Screen
+        name="contracts/contact-directory"
+        options={{ title: 'İletişim rehberi', headerRight: renderHeaderRight }}
+      />
       <Stack.Screen name="stock/index" options={{ headerShown: false }} />
       <Stack.Screen name="stock/all" options={{ title: 'Tüm stoklar', headerRight: renderHeaderRight }} />
       <Stack.Screen name="stock/product/[id]" options={{ title: t('adminProductDetail'), headerRight: renderHeaderRight }} />
@@ -131,6 +153,7 @@ export default function AdminLayout() {
       <Stack.Screen name="access/staff-permissions" options={{ title: t('adminStaffPermissions'), headerRight: renderHeaderRight }} />
       <Stack.Screen name="access/logs" options={{ title: t('adminAccessLogs'), headerRight: renderHeaderRight }} />
       <Stack.Screen name="permissions" options={{ title: t('adminPermissions'), headerRight: renderHeaderRight }} />
+      <Stack.Screen name="kbs-settings" options={{ title: 'KBS Ayarları', headerRight: renderHeaderRight }} />
       <Stack.Screen name="notifications/index" options={{ title: t('adminNotifications'), headerRight: renderHeaderRight }} />
       <Stack.Screen name="notifications/bulk" options={{ title: t('adminBulkNotification'), headerRight: renderHeaderRight }} />
       <Stack.Screen name="reports/index" options={{ title: t('adminReports'), headerRight: renderHeaderRight }} />
@@ -147,7 +170,7 @@ export default function AdminLayout() {
       <Stack.Screen name="staff/pending" options={{ title: t('adminStaffPending'), headerRight: renderHeaderRight }} />
       <Stack.Screen name="staff/approve/[id]" options={{ title: t('adminStaffApprove'), headerRight: renderHeaderRight }} />
       <Stack.Screen name="qr-designs/index" options={{ title: t('adminQrDesigns'), headerRight: renderHeaderRight }} />
-      <Stack.Screen name="feed/index" options={{ title: 'Paylaşımlar', headerRight: renderHeaderRight }} />
+      <Stack.Screen name="feed/index" options={{ title: 'Gönderiler', headerRight: renderHeaderRight }} />
       <Stack.Screen name="cameras/index" options={{ title: 'Kamera yönetimi', headerRight: renderHeaderRight }} />
       <Stack.Screen name="cameras/new" options={{ title: 'Yeni kamera', headerRight: renderHeaderRight }} />
       <Stack.Screen name="cameras/[id]" options={{ title: 'Kamera düzenle', headerRight: renderHeaderRight }} />

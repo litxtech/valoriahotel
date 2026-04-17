@@ -44,7 +44,12 @@ const STAFF_APP_PERMISSIONS = [
   { key: 'mesajlasma', label: 'Müşterilerle mesajlaşabilir', desc: 'Misafirlerle sohbet ve mesaj görüntüleme.' },
   { key: 'video_paylasim', label: 'Video/resim paylaşabilir', desc: 'Feed ve sohbetlerde medya paylaşımı.' },
   { key: 'ekip_sohbet', label: 'Ekip sohbetini görebilir', desc: 'Tüm personel sohbet kanalına erişim.' },
-  { key: 'gorev_ata', label: 'Görev atayabilir', desc: 'Diğer personel için görev oluşturma.' },
+  {
+    key: 'gorev_ata',
+    label: 'Görev atayabilir',
+    desc: 'Admin verdiği sürece diğer personel için görev oluşturur; admin bu kutuyu kapatana kadar yetki devam eder. Tam yönetim paneli değil, sadece görev listesi ve atama ekranı açılır.',
+  },
+  { key: 'satis_komisyon', label: 'Satış/komisyon modülü', desc: 'Referanslı rezervasyon, ödeme yeri ve komisyon hakedişi ekranlarına erişim.' },
   { key: 'personel_ekle', label: 'Personel ekleyebilir', desc: 'Yeni çalışan hesabı oluşturma (genelde yönetici).' },
   { key: 'raporlar', label: 'Raporları görebilir', desc: 'Raporlar ve HMB raporlarına erişim.' },
   { key: 'tum_sozlesmeler', label: 'Tüm sözleşmeleri görüntüleyebilir', desc: 'Tüm müşteri sözleşmelerine tarih filtresiyle erişim; telefon ve WhatsApp iletişim.' },

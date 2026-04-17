@@ -21,51 +21,62 @@ async function getNotifications() {
   return Notifications.default;
 }
 
-/** Uygulama açıkken gelen bildirimi nasıl göstereceğiz (sadece dev/build'de); sesli + öncelikli */
+/** Uygulama açıkken gelen bildirim: üst banner + liste + ses (Expo SDK 54+). Android'de ses kapalıysa heads-up da gelmez. */
 const VALORIA_CHANNEL_ID = 'valoria_urgent';
-if (!isExpoGo) {
-  import('expo-notifications').then(async (Notifications) => {
-    Notifications.default.setNotificationHandler({
+
+let pushPresentationInitialized = false;
+
+/** Root veya modül yükünde bir kez çağrılmalı; gecikmeli import ile handler bazen geç kalıyordu. */
+export async function initPushNotificationsPresentation(): Promise<void> {
+  if (isExpoGo || pushPresentationInitialized) return;
+  try {
+    const ExpoN = await import('expo-notifications');
+    const Notifications = ExpoN.default;
+
+    Notifications.setNotificationHandler({
       handleNotification: async () => ({
-        shouldShowAlert: true,
-        shouldPlaySound: true,
-        shouldSetBadge: true,
         shouldShowBanner: true,
         shouldShowList: true,
+        shouldPlaySound: true,
+        shouldSetBadge: true,
+        ...(Platform.OS === 'android'
+          ? { priority: ExpoN.AndroidNotificationPriority.MAX }
+          : {}),
       }),
     });
+    pushPresentationInitialized = true;
+
     if (Platform.OS === 'android') {
       try {
-        // valoria_urgent: Yeni kanal - eski valoria kanalı kullanıcı ayarlarında sessize alınmış olabilir (Android kanal ayarları güncellenemez)
-        await Notifications.default.setNotificationChannelAsync(VALORIA_CHANNEL_ID, {
+        await Notifications.setNotificationChannelAsync(VALORIA_CHANNEL_ID, {
           name: 'Valoria Bildirimleri',
-          importance: Notifications.AndroidImportance.MAX,
+          importance: ExpoN.AndroidImportance.MAX,
           enableVibrate: true,
           enableLights: true,
-          lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+          lockscreenVisibility: ExpoN.AndroidNotificationVisibility.PUBLIC,
           sound: 'default',
           vibrationPattern: [0, 250, 250, 250],
           showBadge: true,
           description: 'Mesajlar, beğeniler ve duyurular',
         });
 
-        await Notifications.default.setNotificationChannelAsync('valoria', {
+        await Notifications.setNotificationChannelAsync('valoria', {
           name: 'Valoria Bildirimleri',
-          importance: Notifications.AndroidImportance.MAX,
+          importance: ExpoN.AndroidImportance.MAX,
           enableVibrate: true,
           enableLights: true,
-          lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+          lockscreenVisibility: ExpoN.AndroidNotificationVisibility.PUBLIC,
           sound: 'default',
           vibrationPattern: [0, 250, 250, 250],
           showBadge: true,
         });
 
-        await Notifications.default.setNotificationChannelAsync('default', {
+        await Notifications.setNotificationChannelAsync('default', {
           name: 'Bildirimler',
-          importance: Notifications.AndroidImportance.MAX,
+          importance: ExpoN.AndroidImportance.MAX,
           enableVibrate: true,
           enableLights: true,
-          lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+          lockscreenVisibility: ExpoN.AndroidNotificationVisibility.PUBLIC,
           sound: 'default',
           vibrationPattern: [0, 250, 250, 250],
           showBadge: true,
@@ -74,7 +85,13 @@ if (!isExpoGo) {
         log.warn('notificationsPush', 'Android kanal ayarı', e);
       }
     }
-  }).catch(() => {});
+  } catch (e) {
+    log.warn('notificationsPush', 'initPushNotificationsPresentation', e);
+  }
+}
+
+if (!isExpoGo) {
+  void initPushNotificationsPresentation();
 }
 
 /** iOS: getExpoPushTokenAsync bazen asla resolve etmez (SDK 53+). Listener'ın uygulama başında kayıtlı olması gerekir. */
@@ -217,23 +234,19 @@ export async function getStoredExpoPushToken(): Promise<string | null> {
   return AsyncStorage.getItem(EXPO_PUSH_TOKEN_KEY);
 }
 
-/** Personel giriş yaptığında: push token'ı backend'e kaydet (push_tokens.staff_id). Token yoksa önce izin isteyip alır. */
+/** Personel giriş yaptığında: push token'ı backend'e kaydet. RLS yüzünden doğrudan upsert aynı cihazda hesap değişince başarısız olabiliyordu; RPC kullanılır. */
 export async function savePushTokenForStaff(staffId: string): Promise<void> {
   if (isExpoGo) return;
   let token = await getStoredExpoPushToken();
   if (!token) token = await getExpoPushTokenAsync();
   if (!token) return;
   try {
-    await supabase.from('push_tokens').upsert(
-      {
-        token,
-        staff_id: staffId,
-        guest_id: null,
-        device_info: { platform: Platform.OS },
-      },
-      { onConflict: 'token' }
-    );
-    log.info('notificationsPush', 'Staff push token kaydedildi', { staffId: staffId.slice(0, 8) });
+    const { error } = await supabase.rpc('upsert_staff_push_token', {
+      p_token: token,
+      p_device_info: { platform: Platform.OS },
+    });
+    if (error) log.error('notificationsPush', 'savePushTokenForStaff RPC', error);
+    else log.info('notificationsPush', 'Staff push token kaydedildi', { staffId: staffId.slice(0, 8) });
   } catch (e) {
     log.error('notificationsPush', 'savePushTokenForStaff', e);
   }

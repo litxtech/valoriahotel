@@ -7,6 +7,13 @@ const CORS = {
 };
 
 const STAFF_ROLES = ["admin", "reception_chief", "receptionist", "housekeeping", "technical", "security"] as const;
+const CONTRACT_TYPES = ["full_time", "fixed_term", "seasonal", "intern", "other"] as const;
+
+function normalizeContractType(v: unknown): string | null {
+  const s = typeof v === "string" ? v.trim() : "";
+  if (!s) return null;
+  return CONTRACT_TYPES.includes(s as (typeof CONTRACT_TYPES)[number]) ? s : null;
+}
 
 type UpdateStaffBody = {
   staff_id: string;
@@ -31,6 +38,13 @@ type UpdateStaffBody = {
   notes?: string | null;
   is_active?: boolean | null;
   verification_badge?: 'blue' | 'yellow' | null;
+  organization_id?: string | null;
+  contract_type?: string | null;
+  termination_date?: string | null;
+  internal_extension?: string | null;
+  certifications_summary?: string | null;
+  kvkk_consent_at?: string | null;
+  drives_vehicle?: boolean | null;
 };
 
 Deno.serve(async (req: Request) => {
@@ -162,6 +176,45 @@ Deno.serve(async (req: Request) => {
   if (body.verification_badge !== undefined) {
     const v = body.verification_badge;
     staffUpdate.verification_badge = (v === 'blue' || v === 'yellow') ? v : null;
+  }
+
+  if (body.organization_id !== undefined && body.organization_id !== null && String(body.organization_id).trim() !== "") {
+    const oid = String(body.organization_id).trim();
+    const { data: orgRow, error: orgErr } = await supabaseAdmin
+      .from("organizations")
+      .select("id")
+      .eq("id", oid)
+      .maybeSingle();
+    if (orgErr || !orgRow?.id) {
+      return new Response(JSON.stringify({ error: "Geçersiz işletme seçimi." }), {
+        status: 400,
+        headers: { ...CORS, "Content-Type": "application/json" },
+      });
+    }
+    staffUpdate.organization_id = oid;
+  }
+
+  if (body.contract_type !== undefined) {
+    staffUpdate.contract_type = body.contract_type === null || body.contract_type === ""
+      ? null
+      : normalizeContractType(body.contract_type);
+  }
+  if (body.termination_date !== undefined) {
+    const t = body.termination_date;
+    staffUpdate.termination_date = t && String(t).trim() ? String(t).trim().slice(0, 10) : null;
+  }
+  if (body.internal_extension !== undefined) {
+    staffUpdate.internal_extension = body.internal_extension?.trim() ?? null;
+  }
+  if (body.certifications_summary !== undefined) {
+    staffUpdate.certifications_summary = body.certifications_summary?.trim() ?? null;
+  }
+  if (body.kvkk_consent_at !== undefined) {
+    const k = body.kvkk_consent_at;
+    staffUpdate.kvkk_consent_at = k && String(k).trim() ? String(k).trim().slice(0, 10) : null;
+  }
+  if (body.drives_vehicle !== undefined) {
+    staffUpdate.drives_vehicle = body.drives_vehicle === true;
   }
 
   if (Object.keys(staffUpdate).length > 0) {

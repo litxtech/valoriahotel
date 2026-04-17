@@ -1,5 +1,6 @@
 import { Alert, Linking, Platform } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { Camera } from 'expo-camera';
 import { emitPermissionLiveChange } from '@/lib/permissionLive';
 
 type EnsureCameraPermissionOptions = {
@@ -32,47 +33,51 @@ function askOpenSettings(message: string): Promise<boolean> {
   });
 }
 
-/** iOS'ta Alert kapandıktan sonra sistem izin penceresinin düzgün görünmesi için kısa gecikme */
-function deferOnIos<T>(fn: () => Promise<T>): Promise<T> {
-  if (Platform.OS === 'ios') {
-    return new Promise((resolve, reject) => {
-      setTimeout(() => fn().then(resolve).catch(reject), 200);
-    });
-  }
-  return fn();
+/** iOS: Alert sonrası izin diyaloğu; Android: bazı cihazlarda izin sonrası kamera açılışı için kısa gecikme */
+function deferBeforePermissionRequest<T>(fn: () => Promise<T>): Promise<T> {
+  const ms = Platform.OS === 'ios' ? 200 : Platform.OS === 'android' ? 120 : 0;
+  if (ms <= 0) return fn();
+  return new Promise((resolve, reject) => {
+    setTimeout(() => fn().then(resolve).catch(reject), ms);
+  });
 }
 
 export async function ensureCameraPermission(
   options?: EnsureCameraPermissionOptions
 ): Promise<boolean> {
-  const title = options?.title ?? 'Kamera izni';
-  const message =
-    options?.message ??
-    'Fotoğraf çekmek için kamera erişimi gerekir. İzin verir misiniz?';
   const settingsMessage =
     options?.settingsMessage ??
     'Kamera izni kapalı. Devam etmek için ayarlardan kamera iznini açın.';
 
-  const current = await ImagePicker.getCameraPermissionsAsync();
-  if (current.status === 'granted') {
+  /**
+   * Barkod (expo-camera) ve foto (expo-image-picker) aynı ANDROID.permission.CAMERA kullanır;
+   * yine de bazı cihazlarda yalnızca bir modülün isteği güncellenir. Önce expo-camera ile kontrol edilir.
+   */
+  const fromCamera = await Camera.getCameraPermissionsAsync();
+  const fromPicker = await ImagePicker.getCameraPermissionsAsync();
+  if (fromCamera.status === 'granted' || fromPicker.status === 'granted') {
     emitPermissionLiveChange();
     return true;
   }
 
-  // canAskAgain false ise OS izin penceresi bir daha gösterilmez – ayarlara yönlendir
-  if (current.canAskAgain === false) {
+  if (fromCamera.canAskAgain === false && fromPicker.canAskAgain === false) {
     await askOpenSettings(settingsMessage);
     return false;
   }
 
-  // Uygulama içinde doğrudan sistem izin penceresini göster (Ara Alert atlanır)
-  const requested = await deferOnIos(() =>
+  const requestedCam = await deferBeforePermissionRequest(() => Camera.requestCameraPermissionsAsync());
+  if (requestedCam.status === 'granted') {
+    emitPermissionLiveChange();
+    return true;
+  }
+
+  const requestedPicker = await deferBeforePermissionRequest(() =>
     ImagePicker.requestCameraPermissionsAsync()
   );
   emitPermissionLiveChange();
-  if (requested.status === 'granted') return true;
+  if (requestedPicker.status === 'granted') return true;
 
-  if (!requested.canAskAgain) {
+  if (requestedPicker.canAskAgain === false || requestedCam.canAskAgain === false) {
     await askOpenSettings(settingsMessage);
   }
   return false;

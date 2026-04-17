@@ -39,6 +39,15 @@ const SHIFT_TYPES = [
   { value: 'flexible', label: 'Esnek' },
 ];
 
+const CONTRACT_TYPES: { value: string; label: string }[] = [
+  { value: '', label: 'Seçilmedi' },
+  { value: 'full_time', label: 'Belirsiz süreli' },
+  { value: 'fixed_term', label: 'Belirli süreli' },
+  { value: 'seasonal', label: 'Sezonluk' },
+  { value: 'intern', label: 'Stajyer' },
+  { value: 'other', label: 'Diğer' },
+];
+
 const APP_PERMISSIONS = [
   { key: 'stok_giris', label: 'Stok girişi yapabilir' },
   { key: 'mesajlasma', label: 'Müşterilerle mesajlaşabilir' },
@@ -47,6 +56,7 @@ const APP_PERMISSIONS = [
   { key: 'gorev_ata', label: 'Görev atayabilir' },
   { key: 'personel_ekle', label: 'Personel ekleyebilir (sadece yönetici)' },
   { key: 'raporlar', label: 'Raporları görebilir' },
+  { key: 'satis_komisyon', label: 'Satış / komisyon modülüne erişebilir' },
   { key: 'tum_sozlesmeler', label: 'Tüm sözleşmeleri görüntüleyebilir' },
 ];
 
@@ -65,11 +75,14 @@ const DEFAULT_PERMISSIONS: Record<string, boolean> = {
   mesajlasma: true,
   video_paylasim: true,
   ekip_sohbet: true,
-  gorev_ata: true,
+  gorev_ata: false,
   personel_ekle: false,
   raporlar: false,
+  satis_komisyon: false,
   tum_sozlesmeler: false,
 };
+
+type OrgRow = { id: string; name: string; slug: string; kind: string };
 
 type StaffDetail = {
   id: string;
@@ -97,6 +110,13 @@ type StaffDetail = {
   emergency_contact_phone: string | null;
   whatsapp: string | null;
   verification_badge: 'blue' | 'yellow' | null;
+  organization_id: string | null;
+  contract_type?: string | null;
+  termination_date?: string | null;
+  internal_extension?: string | null;
+  certifications_summary?: string | null;
+  kvkk_consent_at?: string | null;
+  drives_vehicle?: boolean | null;
 };
 
 export default function EditStaffScreen() {
@@ -130,6 +150,22 @@ export default function EditStaffScreen() {
   const [emergency_contact_phone, setEmergencyContactPhone] = useState('');
   const [whatsapp, setWhatsapp] = useState('');
   const [verification_badge, setVerificationBadge] = useState<'blue' | 'yellow' | ''>('');
+  const [organizations, setOrganizations] = useState<OrgRow[]>([]);
+  const [organizationId, setOrganizationId] = useState<string | null>(null);
+  const [contract_type, setContractType] = useState('');
+  const [termination_date, setTerminationDate] = useState('');
+  const [internal_extension, setInternalExtension] = useState('');
+  const [certifications_summary, setCertificationsSummary] = useState('');
+  const [kvkk_consent_at, setKvkkConsentAt] = useState('');
+  const [drives_vehicle, setDrivesVehicle] = useState(false);
+
+  useEffect(() => {
+    supabase
+      .from('organizations')
+      .select('id, name, slug, kind')
+      .order('name')
+      .then(({ data }) => setOrganizations((data as OrgRow[]) ?? []));
+  }, []);
 
   useEffect(() => {
     if (!id) return;
@@ -137,7 +173,7 @@ export default function EditStaffScreen() {
       const { data, error } = await supabase
         .from('staff')
         .select(
-          'id, full_name, email, role, department, position, phone, birth_date, id_number, address, hire_date, personnel_no, salary, sgk_no, app_permissions, work_days, shift_type, notes, is_active, office_location, achievements, emergency_contact_name, emergency_contact_phone, whatsapp, verification_badge'
+          'id, full_name, email, role, department, position, phone, birth_date, id_number, address, hire_date, personnel_no, salary, sgk_no, app_permissions, work_days, shift_type, notes, is_active, office_location, achievements, emergency_contact_name, emergency_contact_phone, whatsapp, verification_badge, organization_id, contract_type, termination_date, internal_extension, certifications_summary, kvkk_consent_at, drives_vehicle'
         )
         .eq('id', id)
         .single();
@@ -172,6 +208,13 @@ export default function EditStaffScreen() {
       setEmergencyContactPhone(s.emergency_contact_phone ?? '');
       setWhatsapp(s.whatsapp ?? '');
       setVerificationBadge(s.verification_badge === 'blue' || s.verification_badge === 'yellow' ? s.verification_badge : '');
+      setOrganizationId(s.organization_id ?? null);
+      setContractType(s.contract_type ?? '');
+      setTerminationDate(s.termination_date ?? '');
+      setInternalExtension(s.internal_extension ?? '');
+      setCertificationsSummary(s.certifications_summary ?? '');
+      setKvkkConsentAt(s.kvkk_consent_at ?? '');
+      setDrivesVehicle(s.drives_vehicle === true);
     })().finally(() => setLoading(false));
   }, [id]);
 
@@ -187,6 +230,10 @@ export default function EditStaffScreen() {
 
   const submit = async () => {
     if (!id || !staff) return;
+    if (!organizationId) {
+      Alert.alert('Hata', 'İşletme seçin.');
+      return;
+    }
     setSaving(true);
     try {
       await supabase.auth.refreshSession();
@@ -232,6 +279,13 @@ export default function EditStaffScreen() {
           emergency_contact_name: emergency_contact_name.trim() || null,
           emergency_contact_phone: emergency_contact_phone.trim() || null,
           verification_badge: verification_badge === 'blue' || verification_badge === 'yellow' ? verification_badge : null,
+          organization_id: organizationId ?? undefined,
+          contract_type: contract_type.trim() ? contract_type.trim() : null,
+          termination_date: termination_date.trim() || null,
+          internal_extension: internal_extension.trim() || null,
+          certifications_summary: certifications_summary.trim() || null,
+          kvkk_consent_at: kvkk_consent_at.trim() || null,
+          drives_vehicle,
         }),
       });
       const data = (await res.json().catch(() => ({}))) as { error?: string };
@@ -247,6 +301,12 @@ export default function EditStaffScreen() {
           emergency_contact_phone: emergency_contact_phone.trim() || null,
           whatsapp: whatsapp.trim() || null,
           verification_badge: verification_badge === 'blue' || verification_badge === 'yellow' ? verification_badge : null,
+          contract_type: contract_type.trim() ? contract_type.trim() : null,
+          termination_date: termination_date.trim() || null,
+          internal_extension: internal_extension.trim() || null,
+          certifications_summary: certifications_summary.trim() || null,
+          kvkk_consent_at: kvkk_consent_at.trim() || null,
+          drives_vehicle,
         })
         .eq('id', id);
       if (updateErr) throw new Error(updateErr.message);
@@ -310,6 +370,18 @@ export default function EditStaffScreen() {
         <TextInput style={styles.input} value={emergency_contact_phone} onChangeText={setEmergencyContactPhone} placeholder="0532 111 22 33" keyboardType="phone-pad" placeholderTextColor="#9ca3af" />
 
         <Text style={styles.sectionTitle}>🏢 Çalışan bilgileri</Text>
+        <Text style={styles.label}>İşletme</Text>
+        <View style={styles.chips}>
+          {organizations.map((o) => (
+            <TouchableOpacity
+              key={o.id}
+              style={[styles.chip, organizationId === o.id && styles.chipActive]}
+              onPress={() => setOrganizationId(o.id)}
+            >
+              <Text style={[styles.chipText, organizationId === o.id && styles.chipTextActive]}>{o.name}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
         <Text style={styles.label}>Rol</Text>
         <View style={styles.chips}>
           {ROLES.map((r) => (
@@ -349,6 +421,59 @@ export default function EditStaffScreen() {
         <TextInput style={styles.input} value={salary} onChangeText={setSalary} placeholder="Maaş" keyboardType="decimal-pad" placeholderTextColor="#9ca3af" />
         <Text style={styles.label}>SGK no</Text>
         <TextInput style={styles.input} value={sgk_no} onChangeText={setSgkNo} placeholder="SGK no" placeholderTextColor="#9ca3af" />
+
+        <Text style={styles.sectionTitle}>📋 Ek seçenekler (İK)</Text>
+        <Text style={styles.label}>Sözleşme tipi</Text>
+        <View style={styles.chips}>
+          {CONTRACT_TYPES.map((c) => (
+            <TouchableOpacity
+              key={c.value || 'none'}
+              style={[styles.chip, contract_type === c.value && styles.chipActive]}
+              onPress={() => setContractType(c.value)}
+            >
+              <Text style={[styles.chipText, contract_type === c.value && styles.chipTextActive]} numberOfLines={2}>
+                {c.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        <Text style={styles.label}>İşten çıkış tarihi (varsa)</Text>
+        <TextInput
+          style={styles.input}
+          value={termination_date}
+          onChangeText={setTerminationDate}
+          placeholder="YYYY-MM-DD"
+          placeholderTextColor="#9ca3af"
+        />
+        <Text style={styles.label}>Dahili hat</Text>
+        <TextInput
+          style={styles.input}
+          value={internal_extension}
+          onChangeText={setInternalExtension}
+          placeholder="Örn: 204"
+          placeholderTextColor="#9ca3af"
+        />
+        <Text style={styles.label}>Sertifikalar / geçerlilik</Text>
+        <TextInput
+          style={[styles.input, styles.textArea]}
+          value={certifications_summary}
+          onChangeText={setCertificationsSummary}
+          placeholder={'İlk yardım — 2026-12-01\nHijyen — 2025-06-15'}
+          placeholderTextColor="#9ca3af"
+          multiline
+        />
+        <Text style={styles.label}>KVKK onay tarihi</Text>
+        <TextInput
+          style={styles.input}
+          value={kvkk_consent_at}
+          onChangeText={setKvkkConsentAt}
+          placeholder="YYYY-MM-DD"
+          placeholderTextColor="#9ca3af"
+        />
+        <View style={styles.rowSwitch}>
+          <Text style={styles.label}>Ehliyet / araç kullanabilir</Text>
+          <Switch value={drives_vehicle} onValueChange={setDrivesVehicle} trackColor={{ false: '#cbd5e0', true: '#1a365d' }} thumbColor="#fff" />
+        </View>
 
         <Text style={styles.sectionTitle}>⏰ Çalışma</Text>
         <Text style={styles.label}>Vardiya</Text>

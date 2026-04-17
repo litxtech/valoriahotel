@@ -238,7 +238,14 @@ async function sendEmailWithAttachment(opts: {
   pdfBytes: Uint8Array;
 }) {
   const resendApiKey = Deno.env.get("RESEND_API_KEY");
-  const from = Deno.env.get("PRINTER_FROM_EMAIL") || "Valoria <onboarding@resend.dev>";
+  // PRINTER_FROM_EMAIL bazen panelden kopyala/yapistirda satir sonu alabiliyor.
+  // Resend'e bozuk "from" gitmesin diye normalize et.
+  const rawFrom = Deno.env.get("PRINTER_FROM_EMAIL") ?? "";
+  const normalizedFrom = rawFrom.replace(/[\r\n]+/g, "").trim();
+  const fromIsValid = normalizedFrom.includes("@") && normalizedFrom.includes("<") && normalizedFrom.includes(">");
+
+  // Domain verify edilmediyse Resend kısıtlayabilir; yine de "from" formatini koru.
+  const from = fromIsValid ? normalizedFrom : "Valoria <onboarding@resend.dev>";
   if (!resendApiKey) throw new Error("RESEND_API_KEY tanimli degil");
 
   let binary = "";
@@ -299,12 +306,16 @@ Deno.serve(async (req: Request) => {
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const supabase = createClient(supabaseUrl, serviceKey);
 
+  // catch blogu icin: hata olursa contract id ile printer_logs yazalim.
+  let contractIdForLog: string | null = null;
+
   try {
     const body = await req.json();
     const record = (body?.record ?? body) as AcceptanceRecord;
     const eventType = (body?.type ?? "INSERT") as string;
     const isTest = body?.test === true;
     if (!record?.id) throw new Error("record.id bulunamadi");
+    contractIdForLog = record.id;
 
     const printer = await resolvePrinterSettings(supabase);
     if (!printer.enabled) {
@@ -378,8 +389,16 @@ Deno.serve(async (req: Request) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Beklenmeyen hata";
     try {
-      const body = await req.clone().json();
-      await insertPrinterLog(supabase, body?.test ? null : body?.record?.id ?? null, "failed", message);
+      // body okumasini garanti etmek zor; en azindan contractIdForLog varsa log'a yazalim.
+      let maybeContractId: string | null = contractIdForLog;
+      try {
+        const body = await req.clone().json();
+        if (body?.test === true) maybeContractId = null;
+        else maybeContractId = body?.record?.id ?? maybeContractId;
+      } catch {
+        // no-op
+      }
+      await insertPrinterLog(supabase, maybeContractId, "failed", message);
     } catch {
       // no-op
     }

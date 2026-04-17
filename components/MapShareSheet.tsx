@@ -24,12 +24,15 @@ import { useAuthStore } from '@/stores/authStore';
 import { supabase } from '@/lib/supabase';
 import { uriToArrayBuffer } from '@/lib/uploadMedia';
 import { getOrCreateGuestForCaller, getOrCreateGuestForCurrentSession } from '@/lib/getOrCreateGuestForCaller';
+import { guestDisplayName } from '@/lib/guestDisplayName';
 import { ensureCameraPermission } from '@/lib/cameraPermission';
 import { ensureMediaLibraryPermission } from '@/lib/mediaLibraryPermission';
 import { theme } from '@/constants/theme';
 import { CachedImage } from '@/components/CachedImage';
 import { Ionicons } from '@expo/vector-icons';
 import { POST_TAGS, type PostTagValue } from '@/lib/feedPostTags';
+import { notifyGuestsOfNewFeedPost, notifyStaffOfNewFeedPost } from '@/lib/notifyNewFeedPost';
+import { log } from '@/lib/logger';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const BUCKET = 'feed-media';
@@ -217,6 +220,36 @@ export default function MapShareSheet({ visible, onClose, location, onSuccess }:
         setUploading(false);
         Alert.alert('Hata', insertErr?.message ?? 'Paylaşım kaydedilemedi.');
         return;
+      }
+      const titleTrim = (title ?? '').trim();
+      const titlePreview =
+        titleTrim.slice(0, 120) + (titleTrim.length > 120 ? '…' : '') || null;
+      try {
+        if (staff) {
+          await notifyStaffOfNewFeedPost({
+            postId: String(postId),
+            authorDisplayName: staff.full_name ?? 'Bir çalışan',
+            titlePreview,
+            excludeStaffId: staff.id,
+            createdByStaffId: staff.id,
+          });
+          await notifyGuestsOfNewFeedPost(String(postId));
+        } else if (guestId) {
+          const { data: guestRow } = await supabase
+            .from('guests')
+            .select('full_name')
+            .eq('id', guestId)
+            .maybeSingle();
+          const authorName = guestDisplayName((guestRow as { full_name?: string | null } | null)?.full_name, 'Misafir');
+          await notifyStaffOfNewFeedPost({
+            postId: String(postId),
+            authorDisplayName: authorName,
+            titlePreview,
+          });
+          await notifyGuestsOfNewFeedPost(String(postId));
+        }
+      } catch (e) {
+        log.warn('MapShareSheet', 'notifyStaffOfNewFeedPost', e);
       }
       resetForm();
       onSuccess?.();

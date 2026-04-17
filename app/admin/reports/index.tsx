@@ -12,6 +12,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
+import { sendNotification } from '@/lib/notificationService';
 import { useAuthStore } from '@/stores/authStore';
 import { adminTheme } from '@/constants/adminTheme';
 import { AdminCard } from '@/components/admin';
@@ -122,22 +123,24 @@ export default function AdminReportsIndex() {
       ? `"${postTitle}" paylaşımına dair bildiriminiz ${statusLabel} olarak işlendi.`
       : `Paylaşım bildiriminiz ${statusLabel} olarak işlendi.`;
     if (r.reporter_staff_id) {
-      await supabase.from('notifications').insert({
-        staff_id: r.reporter_staff_id,
+      await sendNotification({
+        staffId: r.reporter_staff_id,
         title: notifTitle,
         body: notifBody,
         category: 'staff',
-        notification_type: 'report_status',
+        notificationType: 'report_status',
         data: { reportId, status: newStatus },
+        createdByStaffId: staff.id,
       });
     } else if (r.reporter_guest_id) {
-      await supabase.from('notifications').insert({
-        guest_id: r.reporter_guest_id,
+      await sendNotification({
+        guestId: r.reporter_guest_id,
         title: notifTitle,
         body: notifBody,
         category: 'guest',
-        notification_type: 'report_status',
+        notificationType: 'report_status',
         data: { reportId, status: newStatus },
+        createdByStaffId: staff.id,
       });
     }
     setUpdatingId(null);

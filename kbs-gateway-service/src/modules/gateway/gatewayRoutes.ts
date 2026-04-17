@@ -1,0 +1,100 @@
+import type { FastifyPluginAsync } from 'fastify';
+import { z } from 'zod';
+import { Readable } from 'node:stream';
+import { verifyGatewaySignature } from '../../shared/security/signature.js';
+import { loadHotelCredentials } from '../credentials/credentialsService.js';
+import { MockOfficialProvider } from '../providers/mockProvider.js';
+import { HttpOfficialProvider } from '../providers/httpProvider.js';
+import type { OfficialSubmissionProvider, SubmitCheckInPayload, SubmitCheckOutPayload } from '../providers/types.js';
+
+const BaseSchema = z.object({
+  hotelId: z.string().uuid(),
+  guestDocumentId: z.string().uuid(),
+  stayAssignmentId: z.string().uuid(),
+  transactionId: z.string().uuid()
+});
+
+function createProvider(app: any): OfficialSubmissionProvider {
+  if (app.env.OFFICIAL_PROVIDER_MODE === 'mock') return new MockOfficialProvider();
+  if (!app.env.OFFICIAL_PROVIDER_BASE_URL) throw new Error('OFFICIAL_PROVIDER_BASE_URL required for http provider');
+  return new HttpOfficialProvider(app.env.OFFICIAL_PROVIDER_BASE_URL);
+}
+
+export const gatewayRoutes: FastifyPluginAsync = async (app) => {
+  const provider = createProvider(app);
+
+  const rawBodyToStream = (s: string) => Readable.from([s]);
+
+  async function verifyRequest(req: any, rawBody: string) {
+    const ts = Number(req.headers['x-gw-ts']);
+    const signature = String(req.headers['x-gw-signature'] ?? '');
+    const path = req.routerPath ?? req.raw.url ?? '';
+    const result = verifyGatewaySignature({
+      secret: app.env.GATEWAY_SHARED_SECRET,
+      ts,
+      method: req.method,
+      path,
+      body: rawBody,
+      signature
+    });
+    if (!result.ok) {
+      app.log.warn({ reason: result.reason }, 'gateway_signature_invalid');
+      return false;
+    }
+    return true;
+  }
+
+  // Fastify rawBody capture (for signature)
+  app.addHook('preParsing', async (req, _reply, payload) => {
+    // @ts-expect-error attach raw body promise
+    req.rawBody = await (async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of payload) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      return Buffer.concat(chunks).toString('utf8');
+    })();
+    // Re-inject payload for downstream JSON parser
+    // @ts-expect-error return new stream
+    return rawBodyToStream(String(req.rawBody ?? ''));
+  });
+
+  app.post('/gateway/check-in', async (req: any, reply) => {
+    const rawBody = String(req.rawBody ?? '');
+    if (!(await verifyRequest(req, rawBody))) return reply.status(401).send({ ok: false, error: { code: 'INVALID_SIGNATURE', message: 'Unauthorized' } });
+
+    const body = BaseSchema.parse(req.body) as SubmitCheckInPayload;
+    const credentials = await loadHotelCredentials({ supabase: app.supabase, hotelId: body.hotelId, secret: app.env.KBS_CREDENTIAL_SECRET });
+    try {
+      const res = await provider.submitCheckIn(body, credentials);
+      return { ok: true, data: res };
+    } catch (e) {
+      app.log.error({ err: e, transactionId: body.transactionId }, 'provider_checkin_failed');
+      return reply.status(502).send({ ok: false, error: { code: 'PROVIDER_ERROR', message: 'Provider check-in failed' } });
+    }
+  });
+
+  app.post('/gateway/check-out', async (req: any, reply) => {
+    const rawBody = String(req.rawBody ?? '');
+    if (!(await verifyRequest(req, rawBody))) return reply.status(401).send({ ok: false, error: { code: 'INVALID_SIGNATURE', message: 'Unauthorized' } });
+
+    const body = BaseSchema.parse(req.body) as SubmitCheckOutPayload;
+    const credentials = await loadHotelCredentials({ supabase: app.supabase, hotelId: body.hotelId, secret: app.env.KBS_CREDENTIAL_SECRET });
+    try {
+      const res = await provider.submitCheckOut(body, credentials);
+      return { ok: true, data: res };
+    } catch (e) {
+      app.log.error({ err: e, transactionId: body.transactionId }, 'provider_checkout_failed');
+      return reply.status(502).send({ ok: false, error: { code: 'PROVIDER_ERROR', message: 'Provider check-out failed' } });
+    }
+  });
+
+  app.post('/gateway/test-connection', async (req: any, reply) => {
+    const rawBody = String(req.rawBody ?? '');
+    if (!(await verifyRequest(req, rawBody))) return reply.status(401).send({ ok: false, error: { code: 'INVALID_SIGNATURE', message: 'Unauthorized' } });
+
+    const body = z.object({ hotelId: z.string().uuid() }).parse(req.body);
+    const credentials = await loadHotelCredentials({ supabase: app.supabase, hotelId: body.hotelId, secret: app.env.KBS_CREDENTIAL_SECRET });
+    const res = await provider.testConnection(credentials);
+    return { ok: true, data: res };
+  });
+};
+

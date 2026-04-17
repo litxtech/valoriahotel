@@ -16,11 +16,13 @@ import * as ImagePicker from 'expo-image-picker';
 import { Video, ResizeMode } from 'expo-av';
 import { useAuthStore } from '@/stores/authStore';
 import { supabase } from '@/lib/supabase';
+import { log } from '@/lib/logger';
 import { uriToArrayBuffer } from '@/lib/uploadMedia';
 import { CachedImage } from '@/components/CachedImage';
 import { ensureCameraPermission } from '@/lib/cameraPermission';
 import { ensureMediaLibraryPermission } from '@/lib/mediaLibraryPermission';
 import { POST_TAGS, type PostTagValue } from '@/lib/feedPostTags';
+import { notifyGuestsOfNewFeedPost, notifyStaffOfNewFeedPost } from '@/lib/notifyNewFeedPost';
 
 const VISIBILITY_OPTIONS = [
   { value: 'all_staff', label: 'Tüm personel' },
@@ -150,37 +152,20 @@ export default function NewFeedPostScreen() {
       }
       const newPostId = insertedPost.id;
       const authorLabel = staff.full_name ?? 'Bir çalışan';
-      const titleShort = (title ?? '').trim().slice(0, 50) + ((title ?? '').trim().length > 50 ? '…' : '') || 'Yeni paylaşım';
-      const notifData = { screen: 'staff_feed', url: '/staff/feed', postId: newPostId };
+      const titleTrim = (title ?? '').trim();
+      const titlePreview =
+        titleTrim.slice(0, 120) + (titleTrim.length > 120 ? '…' : '') || null;
       try {
-        const { data: staffRows } = await supabase.from('staff').select('id').eq('is_active', true);
-        const allStaffIds = (staffRows ?? []).map((r: { id: string }) => r.id);
-        const staffIdsToNotify = allStaffIds.filter((id) => id !== staff.id);
-        if (staffIdsToNotify.length > 0) {
-          await supabase.from('notifications').insert(
-            staffIdsToNotify.map((staffId) => ({
-              staff_id: staffId,
-              title: 'Yeni paylaşım',
-              body: `${authorLabel}: ${titleShort}`,
-              category: 'staff',
-              notification_type: 'feed_post',
-              data: { postId: newPostId, url: '/staff/feed' },
-              created_by: staff.id,
-              sent_via: 'both',
-              sent_at: new Date().toISOString(),
-            }))
-          );
-          await supabase.functions.invoke('send-expo-push', {
-            body: {
-              staffIds: staffIdsToNotify,
-              title: 'Yeni paylaşım',
-              body: `${authorLabel}: ${titleShort}`,
-              data: notifData,
-            },
-          });
-        }
-      } catch (_) {
-        // push veya bildirim kaydı gönderilemezse sessizce devam et
+        await notifyStaffOfNewFeedPost({
+          postId: newPostId,
+          authorDisplayName: authorLabel,
+          titlePreview,
+          excludeStaffId: staff.id,
+          createdByStaffId: staff.id,
+        });
+        await notifyGuestsOfNewFeedPost(newPostId);
+      } catch (e) {
+        log.warn('staff/feed/new', 'bildirim veya push', e);
       }
       router.back();
     } catch (e) {

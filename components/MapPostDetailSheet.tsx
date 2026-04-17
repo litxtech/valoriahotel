@@ -25,6 +25,7 @@ import { theme } from '@/constants/theme';
 import { StaffNameWithBadge } from '@/components/VerifiedBadge';
 import { CachedImage } from '@/components/CachedImage';
 import { getOrCreateGuestForCurrentSession } from '@/lib/getOrCreateGuestForCaller';
+import { guestDisplayName, isOpaqueGuestDisplayString } from '@/lib/guestDisplayName';
 import { useAuthStore } from '@/stores/authStore';
 import { formatDistanceToNow } from 'date-fns';
 import { tr } from 'date-fns/locale';
@@ -63,19 +64,28 @@ type MapPostDetailSheetProps = {
   onClose: () => void;
   /** Gönderi silindikten sonra harita listesini yenilemek için */
   onPostDeleted?: () => void;
+  /** Gönderi artık yoksa (silindi / görünürlük değişti): haritadaki pini kaldır */
+  onPostUnavailable?: (postId: string) => void;
 };
 
 function getDisplayName(): string {
   const { user } = useAuthStore.getState();
   if (!user) return 'Misafir';
   const name = user.user_metadata?.full_name ?? user.user_metadata?.name;
-  if (name && typeof name === 'string') return name.trim();
+  if (name && typeof name === 'string') {
+    const t = name.trim();
+    if (t && !isOpaqueGuestDisplayString(t)) return t;
+  }
   const email = user.email ?? '';
   const part = email.split('@')[0];
-  return part ? part.charAt(0).toUpperCase() + part.slice(1) : 'Misafir';
+  if (part) {
+    const cap = part.charAt(0).toUpperCase() + part.slice(1);
+    if (!isOpaqueGuestDisplayString(cap)) return cap;
+  }
+  return 'Misafir';
 }
 
-export default function MapPostDetailSheet({ visible, postId, onClose, onPostDeleted }: MapPostDetailSheetProps) {
+export default function MapPostDetailSheet({ visible, postId, onClose, onPostDeleted, onPostUnavailable }: MapPostDetailSheetProps) {
   const router = useRouter();
   const { width: winWidth } = useWindowDimensions();
   const [post, setPost] = useState<PostRow | null>(null);
@@ -87,10 +97,14 @@ export default function MapPostDetailSheet({ visible, postId, onClose, onPostDel
   const [commentText, setCommentText] = useState('');
   const [togglingLike, setTogglingLike] = useState(false);
   const [postingComment, setPostingComment] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  /** Mevcut oturumdaki misafir id (sil butonu / kendi gönderisi kontrolü) */
+  const [myGuestId, setMyGuestId] = useState<string | null>(null);
 
   const loadPost = useCallback(async () => {
     if (!postId) return;
     const guestRow = await getOrCreateGuestForCurrentSession();
+    setMyGuestId(guestRow?.guest_id ?? null);
     const hidden = guestRow?.guest_id
       ? await getHiddenUsersForGuest(guestRow.guest_id)
       : { hiddenStaffIds: new Set<string>(), hiddenGuestIds: new Set<string>() };
@@ -109,8 +123,13 @@ export default function MapPostDetailSheet({ visible, postId, onClose, onPostDel
       ? (postRow.staff_id && hidden.hiddenStaffIds.has(postRow.staff_id)) ||
         (postRow.guest_id && hidden.hiddenGuestIds.has(postRow.guest_id))
       : false;
-    if (hiddenPost || !postRow) {
+    if (hiddenPost) {
       setPost(null);
+      return;
+    }
+    if (!postRow) {
+      setPost(null);
+      onPostUnavailable?.(postId);
       return;
     }
     setPost(postRow);
@@ -133,12 +152,13 @@ export default function MapPostDetailSheet({ visible, postId, onClose, onPostDel
     if (guestRow) {
       supabase.from('feed_post_views').upsert({ post_id: postId, guest_id: guestRow.guest_id }, { onConflict: 'post_id,guest_id', ignoreDuplicates: true }).then(() => {}).catch(() => {});
     }
-  }, [postId]);
+  }, [postId, onPostUnavailable]);
 
   useEffect(() => {
     if (!visible || !postId) {
       setPost(null);
       setLoading(true);
+      setMyGuestId(null);
       return;
     }
     setLoading(true);
@@ -221,7 +241,9 @@ export default function MapPostDetailSheet({ visible, postId, onClose, onPostDel
 
   const rawStaff = post?.staff as { full_name?: string; department?: string; verification_badge?: 'blue' | 'yellow' | null; profile_image?: string | null } | null;
   const rawGuest = post?.guest as { full_name?: string | null; photo_url?: string | null } | null;
-  const authorName = (rawStaff?.full_name ?? rawGuest?.full_name ?? 'Misafir').trim() || 'Misafir';
+  const authorName = post?.staff_id
+    ? (rawStaff?.full_name?.trim() || 'Personel')
+    : guestDisplayName(rawGuest?.full_name, 'Misafir');
   const authorAvatarUrl = rawStaff?.profile_image ?? rawGuest?.photo_url ?? null;
   const badge = rawStaff?.verification_badge ?? null;
   const dept = rawStaff?.department;
@@ -288,8 +310,14 @@ export default function MapPostDetailSheet({ visible, postId, onClose, onPostDel
               <View style={styles.body}>
                 <Text style={styles.title}>{post.title || (isVideo ? 'Video' : post.media_type === 'text' ? 'Metin' : 'Fotoğraf')}</Text>
                 <View style={styles.metaRow}>
-                  <StaffNameWithBadge name={authorName} badge={badge} textStyle={styles.metaText} />
-                  {dept ? <Text style={styles.metaText}> · {dept}</Text> : <Text style={styles.metaText}> · Misafir</Text>}
+                  {post.staff_id ? (
+                    <>
+                      <StaffNameWithBadge name={authorName} badge={badge} textStyle={styles.metaText} />
+                      {dept ? <Text style={styles.metaText}> · {dept}</Text> : null}
+                    </>
+                  ) : (
+                    <Text style={styles.metaText}>{authorName}</Text>
+                  )}
                 </View>
                 <View style={styles.cardActionsRow}>
                   {profileHref && (
@@ -304,8 +332,8 @@ export default function MapPostDetailSheet({ visible, postId, onClose, onPostDel
                       {authorAvatarUrl ? (
                         <CachedImage uri={authorAvatarUrl} style={styles.profileBtnAvatar} contentFit="cover" />
                       ) : (
-                        <View style={[styles.profileBtnAvatar, styles.profileBtnAvatarPlaceholder]}>
-                          <Text style={styles.profileBtnAvatarInitial}>{authorName.charAt(0).toUpperCase()}</Text>
+                        <View style={[styles.profileBtnAvatar, post.staff_id ? styles.profileBtnAvatarPlaceholder : styles.profileBtnAvatarPlaceholderGuest]}>
+                          <Text style={post.staff_id ? styles.profileBtnAvatarInitial : styles.profileBtnAvatarInitialGuest}>{authorName.charAt(0).toUpperCase()}</Text>
                         </View>
                       )}
                       <Text style={styles.profileBtnText}>Profile'a Git</Text>
@@ -347,7 +375,10 @@ export default function MapPostDetailSheet({ visible, postId, onClose, onPostDel
                 <View style={styles.commentsBlock}>
                   <Text style={styles.commentsTitle}>Yorumlar</Text>
                   {comments.map((c) => {
-                    const cAuthor = (c.staff?.full_name ?? c.guest?.full_name ?? '—').trim() || '—';
+                    const isGuestComment = !c.staff_id && !!c.guest_id;
+                    const cAuthor = isGuestComment
+                      ? guestDisplayName(c.guest?.full_name, '—')
+                      : ((c.staff?.full_name ?? '—').trim() || '—');
                     const avatarUri = c.staff?.profile_image ?? c.guest?.photo_url ?? null;
                     const profileHref = c.staff_id ? `/customer/staff/${c.staff_id}` : c.guest_id ? `/customer/guest/${c.guest_id}` : null;
                     return (
@@ -361,8 +392,8 @@ export default function MapPostDetailSheet({ visible, postId, onClose, onPostDel
                         {avatarUri ? (
                           <CachedImage uri={avatarUri} style={styles.commentAvatar} contentFit="cover" />
                         ) : (
-                          <View style={styles.commentAvatarPlaceholder}>
-                            <Text style={styles.commentAvatarInitial}>{(cAuthor || '—').charAt(0).toUpperCase()}</Text>
+                          <View style={isGuestComment ? styles.commentAvatarPlaceholderGuest : styles.commentAvatarPlaceholder}>
+                            <Text style={isGuestComment ? styles.commentAvatarInitialGuest : styles.commentAvatarInitial}>{(cAuthor || '—').charAt(0).toUpperCase()}</Text>
                           </View>
                         )}
                         <View style={styles.commentRowBody}>
@@ -460,7 +491,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  profileBtnAvatarPlaceholderGuest: {
+    backgroundColor: theme.colors.guestAvatarBg,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   profileBtnAvatarInitial: { fontSize: 18, fontWeight: '700', color: theme.colors.textSecondary },
+  profileBtnAvatarInitialGuest: { fontSize: 18, fontWeight: '700', color: theme.colors.guestAvatarLetter },
   profileBtnText: { flex: 1, fontSize: 15, fontWeight: '600', color: theme.colors.primary },
   date: { fontSize: 12, color: theme.colors.textMuted, marginTop: 8 },
   actionsRow: { flexDirection: 'row', alignItems: 'center', gap: 16, marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: theme.colors.borderLight },
@@ -472,7 +509,16 @@ const styles = StyleSheet.create({
   commentRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12, gap: 10 },
   commentAvatar: { width: 32, height: 32, borderRadius: 16 },
   commentAvatarPlaceholder: { width: 32, height: 32, borderRadius: 16, backgroundColor: theme.colors.borderLight, justifyContent: 'center', alignItems: 'center' },
+  commentAvatarPlaceholderGuest: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: theme.colors.guestAvatarBg,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   commentAvatarInitial: { fontSize: 14, fontWeight: '700', color: theme.colors.textSecondary },
+  commentAvatarInitialGuest: { fontSize: 14, fontWeight: '700', color: theme.colors.guestAvatarLetter },
   commentRowBody: { flex: 1, minWidth: 0 },
   commentAuthor: { fontSize: 14, fontWeight: '700', color: theme.colors.text },
   commentText: { fontSize: 14, color: theme.colors.text, marginTop: 2 },

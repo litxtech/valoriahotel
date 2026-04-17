@@ -7,6 +7,13 @@ const CORS = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+const CONTRACT_TYPES = ["full_time", "fixed_term", "seasonal", "intern", "other"] as const;
+function normalizeContractType(v: unknown): string | null {
+  const s = typeof v === "string" ? v.trim() : "";
+  if (!s) return null;
+  return CONTRACT_TYPES.includes(s as (typeof CONTRACT_TYPES)[number]) ? s : null;
+}
+
 function randomPassword(length = 16): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$%";
   let s = "";
@@ -26,6 +33,13 @@ type ApproveBody = {
   app_permissions?: Record<string, boolean> | null;
   work_days?: number[] | null;
   shift_type?: string | null;
+  organization_id?: string | null;
+  contract_type?: string | null;
+  termination_date?: string | null;
+  internal_extension?: string | null;
+  certifications_summary?: string | null;
+  kvkk_consent_at?: string | null;
+  drives_vehicle?: boolean | null;
 };
 
 Deno.serve(async (req: Request) => {
@@ -96,6 +110,13 @@ Deno.serve(async (req: Request) => {
       app_permissions,
       work_days,
       shift_type,
+      organization_id,
+      contract_type,
+      termination_date,
+      internal_extension,
+      certifications_summary,
+      kvkk_consent_at,
+      drives_vehicle,
     } = body;
 
     if (!application_id) {
@@ -115,6 +136,25 @@ Deno.serve(async (req: Request) => {
       return new Response(
         JSON.stringify({ error: "Başvuru bulunamadı veya zaten işlenmiş" }),
         { status: 404, headers: { ...CORS, "Content-Type": "application/json" } }
+      );
+    }
+
+    const orgId = typeof organization_id === "string" && organization_id.trim() ? organization_id.trim() : null;
+    if (!orgId) {
+      return new Response(
+        JSON.stringify({ error: "İşletme (organization_id) seçimi zorunludur." }),
+        { status: 400, headers: { ...CORS, "Content-Type": "application/json" } }
+      );
+    }
+    const { data: orgRow, error: orgErr } = await supabaseAdmin
+      .from("organizations")
+      .select("id")
+      .eq("id", orgId)
+      .maybeSingle();
+    if (orgErr || !orgRow?.id) {
+      return new Response(
+        JSON.stringify({ error: "Geçersiz işletme seçimi." }),
+        { status: 400, headers: { ...CORS, "Content-Type": "application/json" } }
       );
     }
 
@@ -161,6 +201,13 @@ Deno.serve(async (req: Request) => {
       work_days: work_days ?? [1, 2, 3, 4, 5],
       shift_type: shift_type?.trim() || null,
       is_active: true,
+      organization_id: orgId,
+      contract_type: normalizeContractType(contract_type),
+      termination_date: termination_date && String(termination_date).trim() ? String(termination_date).trim().slice(0, 10) : null,
+      internal_extension: internal_extension?.trim() || null,
+      certifications_summary: certifications_summary?.trim() || null,
+      kvkk_consent_at: kvkk_consent_at && String(kvkk_consent_at).trim() ? String(kvkk_consent_at).trim().slice(0, 10) : null,
+      drives_vehicle: drives_vehicle === true,
     });
     if (insertError) {
       return new Response(

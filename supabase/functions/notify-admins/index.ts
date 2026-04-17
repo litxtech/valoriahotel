@@ -15,6 +15,11 @@ type Body = {
   data?: Record<string, unknown>;
 };
 
+function expoDisplayBody(messageBody: string | null | undefined): string {
+  const b = (messageBody ?? "").trim();
+  return b.length > 0 ? b : "Yeni bildirim";
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: CORS });
@@ -74,11 +79,11 @@ Deno.serve(async (req: Request) => {
       ...data,
       screen: data?.screen ?? "admin",
     };
+    const displayBody = expoDisplayBody(messageBody);
     const messages = uniqueTokens.map((to) => ({
       to,
       title: title.trim(),
-      body: messageBody?.trim() ?? undefined,
-      channelId: "valoria_urgent",
+      body: displayBody,
       priority: "high" as const,
       sound: "default" as const,
       interruptionLevel: "active" as const,
@@ -87,6 +92,8 @@ Deno.serve(async (req: Request) => {
 
     let sent = 0;
     let failed = 0;
+    let expoHttpError: string | undefined;
+    const pushTicketErrors: string[] = [];
     for (let i = 0; i < messages.length; i += BATCH_SIZE) {
       const chunk = messages.slice(i, i + BATCH_SIZE);
       const res = await fetch(EXPO_PUSH_URL, {
@@ -95,20 +102,33 @@ Deno.serve(async (req: Request) => {
         body: JSON.stringify(chunk),
       });
       if (!res.ok) {
+        expoHttpError = (await res.text()).slice(0, 800);
         failed += chunk.length;
         continue;
       }
-      const result = (await res.json()) as { data?: { status: string }[] | { status: string } };
+      const result = (await res.json()) as {
+        data?: ({ status: string; message?: string }[] | { status: string; message?: string });
+      };
       const raw = result.data;
       const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
       for (const item of list) {
         if (item.status === "ok") sent++;
-        else failed++;
+        else {
+          failed++;
+          if (item.message && pushTicketErrors.length < 5) pushTicketErrors.push(item.message);
+        }
       }
     }
 
     return new Response(
-      JSON.stringify({ sent, failed, total: uniqueTokens.length, adminCount: adminIds.length }),
+      JSON.stringify({
+        sent,
+        failed,
+        total: uniqueTokens.length,
+        adminCount: adminIds.length,
+        ...(expoHttpError ? { expoHttpError } : {}),
+        ...(pushTicketErrors.length ? { pushTicketErrors } : {}),
+      }),
       { status: 200, headers: { ...CORS, "Content-Type": "application/json" } }
     );
   } catch (e) {

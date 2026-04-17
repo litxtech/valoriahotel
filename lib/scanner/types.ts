@@ -1,0 +1,31 @@
+export type ParsedDocument = {
+  documentType: 'passport' | 'id_card' | 'residence_permit' | 'other';
+  fullName: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  middleName: string | null;
+  documentNumber: string | null;
+  nationalityCode: string | null;
+  issuingCountryCode: string | null;
+  birthDate: string | null;
+  expiryDate: string | null;
+  gender: 'M' | 'F' | 'X' | null;
+  rawMrz: string | null;
+  confidence: number | null;
+  checksumsValid: boolean | null;
+  warnings: string[];
+};
+
+export type ScanResult = {
+  rawMrz: string;
+  parsed: ParsedDocument;
+};
+
+export interface ScannerProvider {
+  /**
+   * Starts a scan session and returns a single scan result.
+   * Real implementations may open a native SDK UI.
+   */
+  scanOnce(): Promise<ScanResult>;
+}
+

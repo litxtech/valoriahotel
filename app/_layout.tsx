@@ -26,10 +26,12 @@ import {
   addNotificationReceivedListener,
   savePushTokenForStaff,
   registerIOSPushTokenListener,
+  initPushNotificationsPresentation,
 } from '@/lib/notificationsPush';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { OfflineBanner } from '@/components/OfflineBanner';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 if (Platform.OS !== 'web') {
   SplashScreen.preventAutoHideAsync();
@@ -41,8 +43,22 @@ const splashLogoSource = require('../assets/splash-icon.png');
 const WEB_BG = '#1a365d';
 
 export default function RootLayout() {
+  const queryClientRef = useRef<QueryClient | null>(null);
+  if (!queryClientRef.current) {
+    queryClientRef.current = new QueryClient({
+      defaultOptions: {
+        queries: { retry: 1, staleTime: 10_000 },
+        mutations: { retry: 0 },
+      },
+    });
+  }
   const [showSplashLogo, setShowSplashLogo] = useState(true);
   const splashOpacity = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    void initPushNotificationsPresentation();
+  }, []);
 
   // LayoutAnimation.configureNext native callback sızıntısını önle (yazarken donma / 501 pending callbacks)
   useEffect(() => {
@@ -153,13 +169,30 @@ export default function RootLayout() {
   // Bildirime tıklandığında yönlendir (aynı mantık hem listener hem cold start için)
   const handleNotificationResponse = (data: Record<string, unknown> | undefined) => {
     if (!data) return;
-    const { staff } = useAuthStore.getState();
     const url = data?.url && typeof data.url === 'string' ? (data.url as string) : '';
     const isInternalPath = url.startsWith('/');
     if (isInternalPath) {
-      const postId = data.postId && typeof data.postId === 'string' ? data.postId : undefined;
+      const rawPid = data.postId ?? (data as { postid?: unknown }).postid;
+      const postId =
+        typeof rawPid === 'string'
+          ? rawPid.trim()
+          : rawPid != null && String(rawPid).length > 0
+            ? String(rawPid).trim()
+            : undefined;
+      const assignmentId =
+        typeof data.assignmentId === 'string'
+          ? data.assignmentId
+          : typeof data.openAssignmentId === 'string'
+            ? data.openAssignmentId
+            : undefined;
       if (postId) {
-        router.push({ pathname: url, params: { openPostId: postId } });
+        if (url.includes('/customer/feed/[id]')) {
+          router.push({ pathname: '/customer/feed/[id]', params: { id: postId } });
+        } else {
+          router.push({ pathname: url, params: { openPostId: postId } });
+        }
+      } else if (assignmentId && url === '/staff/tasks') {
+        router.push({ pathname: '/staff/tasks', params: { focusAssignment: assignmentId } });
       } else {
         router.push(url);
       }
@@ -375,31 +408,33 @@ export default function RootLayout() {
   return (
     <ErrorBoundary>
       <SafeAreaProvider>
-        <React.Fragment>
-          <StatusBar style="auto" />
-          <OfflineBanner />
-          {showSplashLogo ? (
-            <Animated.View style={[styles.splashLogoOverlay, { opacity: splashOpacity }]} pointerEvents="none">
-              <View style={styles.splashLogoBg}>
-                <Image source={splashLogoSource} style={styles.splashLogoImage} resizeMode="contain" />
-              </View>
-            </Animated.View>
-          ) : null}
-          <Stack screenOptions={{ headerShown: false }}>
-            <Stack.Screen name="index" />
-            <Stack.Screen name="room-select" options={{ headerShown: false }} />
-            <Stack.Screen name="policies" />
-            <Stack.Screen name="legal/[type]" options={{ headerShown: true, title: '' }} />
-            <Stack.Screen name="permissions" options={{ headerShown: true, title: 'İzinler' }} />
-            <Stack.Screen name="auth" options={{ headerShown: false }} />
-            <Stack.Screen name="guest" options={{ headerShown: false }} />
-            <Stack.Screen name="customer" options={{ headerShown: false }} />
-            <Stack.Screen name="admin" options={{ headerShown: false }} />
-            <Stack.Screen name="staff" options={{ headerShown: false }} />
-            <Stack.Screen name="join" options={{ headerShown: true, title: 'Personel Başvurusu' }} />
-            <Stack.Screen name="go-to-notifications" options={{ headerShown: false }} />
-          </Stack>
-        </React.Fragment>
+        <QueryClientProvider client={queryClientRef.current}>
+          <React.Fragment>
+            <StatusBar style="auto" />
+            <OfflineBanner />
+            {showSplashLogo ? (
+              <Animated.View style={[styles.splashLogoOverlay, { opacity: splashOpacity }]} pointerEvents="none">
+                <View style={styles.splashLogoBg}>
+                  <Image source={splashLogoSource} style={styles.splashLogoImage} resizeMode="contain" />
+                </View>
+              </Animated.View>
+            ) : null}
+            <Stack screenOptions={{ headerShown: false }}>
+              <Stack.Screen name="index" />
+              <Stack.Screen name="room-select" options={{ headerShown: false }} />
+              <Stack.Screen name="policies" />
+              <Stack.Screen name="legal/[type]" options={{ headerShown: true, title: '' }} />
+              <Stack.Screen name="permissions" options={{ headerShown: true, title: 'İzinler' }} />
+              <Stack.Screen name="auth" options={{ headerShown: false }} />
+              <Stack.Screen name="guest" options={{ headerShown: false }} />
+              <Stack.Screen name="customer" options={{ headerShown: false }} />
+              <Stack.Screen name="admin" options={{ headerShown: false }} />
+              <Stack.Screen name="staff" options={{ headerShown: false }} />
+              <Stack.Screen name="join" options={{ headerShown: true, title: 'Personel Başvurusu' }} />
+              <Stack.Screen name="go-to-notifications" options={{ headerShown: false }} />
+            </Stack>
+          </React.Fragment>
+        </QueryClientProvider>
       </SafeAreaProvider>
     </ErrorBoundary>
   );
