@@ -50,6 +50,10 @@ export function buildApp() {
     protectedScope.register(checkoutRoutes, { prefix: '/' });
     const { documentsRoutes } = await import('../modules/documents/documentsRoutes.js');
     protectedScope.register(documentsRoutes, { prefix: '/' });
+    const { listingRoutes } = await import('../modules/listing/listingRoutes.js');
+    protectedScope.register(listingRoutes, { prefix: '/' });
+    const { staysRoutes } = await import('../modules/stays/staysRoutes.js');
+    protectedScope.register(staysRoutes, { prefix: '/' });
     const { adminKbsSettingsRoutes } = await import('../modules/admin/adminKbsSettingsRoutes.js');
     protectedScope.register(adminKbsSettingsRoutes, { prefix: '/' });
     const { adminPermissionsRoutes } = await import('../modules/admin/adminPermissionsRoutes.js');

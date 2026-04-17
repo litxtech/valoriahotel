@@ -34,11 +34,60 @@ export const documentsRoutes: FastifyPluginAsync = async (app) => {
     if (!auth) throw Errors.unauthorized();
 
     const body = UpsertSchema.parse(req.body);
+    const normalizedDocNo = body.parsed.documentNumber ? body.parsed.documentNumber.trim() : null;
     const fullName =
       body.parsed.fullName ??
       (([body.parsed.firstName, body.parsed.lastName].filter(Boolean).join(' ').trim() || null) as string | null);
     const birthDate = body.parsed.birthDate && body.parsed.birthDate.length >= 10 ? body.parsed.birthDate.slice(0, 10) : null;
     const expiryDate = body.parsed.expiryDate && body.parsed.expiryDate.length >= 10 ? body.parsed.expiryDate.slice(0, 10) : null;
+
+    const scanStatus = normalizedDocNo && fullName ? 'ready_to_submit' : body.parsed.rawMrz ? 'scanned' : 'draft';
+
+    // Idempotency:
+    // - If document identity exists (hotel + type + document_number), update and return it.
+    // - Otherwise create a new guest + guest_document row.
+    if (normalizedDocNo) {
+      const { data: existing, error: exErr } = await app.supabase
+        .schema('ops')
+        .from('guest_documents')
+        .select('id, guest_id, scan_status')
+        .eq('hotel_id', auth.hotelId)
+        .eq('document_type', body.parsed.documentType)
+        .eq('document_number', normalizedDocNo)
+        .maybeSingle();
+      if (exErr) throw Errors.internal('Failed to load existing document');
+      if (existing) {
+        const { data: updated, error: updErr } = await app.supabase
+          .schema('ops')
+          .from('guest_documents')
+          .update({
+            document_number: normalizedDocNo,
+            issuing_country_code: body.parsed.issuingCountryCode,
+            nationality_code: body.parsed.nationalityCode,
+            expiry_date: expiryDate,
+            raw_mrz: body.parsed.rawMrz ?? body.rawMrz ?? null,
+            parsed_payload: body.parsed,
+            scan_confidence: body.scanConfidence ?? body.parsed.confidence ?? null,
+            scan_status: scanStatus
+          })
+          .eq('id', existing.id)
+          .select('id, guest_id, scan_status')
+          .single();
+        if (updErr || !updated) throw Errors.internal('Failed to update document');
+
+        await writeAudit({
+          supabase: app.supabase,
+          hotelId: auth.hotelId,
+          actorUserId: auth.authUserId,
+          action: 'document.upsert',
+          entityType: 'guest_document',
+          entityId: updated.id,
+          metadata: { scan_status: updated.scan_status, idempotent: true }
+        });
+
+        return { ok: true, data: { guestId: updated.guest_id, guestDocumentId: updated.id, scanStatus: updated.scan_status } };
+      }
+    }
 
     // Create guest
     const { data: guest, error: gErr } = await app.supabase
@@ -59,10 +108,7 @@ export const documentsRoutes: FastifyPluginAsync = async (app) => {
       .single();
     if (gErr || !guest) throw Errors.internal('Failed to create guest');
 
-    // Create document (unique constraint may conflict)
-    const scanStatus =
-      body.parsed.documentNumber && fullName ? 'ready_to_submit' : body.parsed.rawMrz ? 'scanned' : 'draft';
-
+    // Create document
     const { data: doc, error: dErr } = await app.supabase
       .schema('ops')
       .from('guest_documents')
@@ -70,7 +116,7 @@ export const documentsRoutes: FastifyPluginAsync = async (app) => {
         guest_id: guest.id,
         hotel_id: auth.hotelId,
         document_type: body.parsed.documentType,
-        document_number: body.parsed.documentNumber,
+        document_number: normalizedDocNo,
         issuing_country_code: body.parsed.issuingCountryCode,
         nationality_code: body.parsed.nationalityCode,
         expiry_date: expiryDate,
@@ -83,7 +129,20 @@ export const documentsRoutes: FastifyPluginAsync = async (app) => {
       .single();
 
     if (dErr || !doc) {
-      // If unique constraint hits, return conflict instead of creating duplicates.
+      // If unique constraint hits (e.g. concurrent inserts), fetch and return existing.
+      if (normalizedDocNo) {
+        const { data: again, error: againErr } = await app.supabase
+          .schema('ops')
+          .from('guest_documents')
+          .select('id, guest_id, scan_status')
+          .eq('hotel_id', auth.hotelId)
+          .eq('document_type', body.parsed.documentType)
+          .eq('document_number', normalizedDocNo)
+          .maybeSingle();
+        if (!againErr && again) {
+          return { ok: true, data: { guestId: again.guest_id, guestDocumentId: again.id, scanStatus: again.scan_status } };
+        }
+      }
       throw Errors.conflict('Document already exists for this hotel');
     }
 

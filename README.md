@@ -19,9 +19,11 @@ Otel konaklama sözleşmesi ve check-in/out yönetim sistemi. Expo 54 + TypeScri
 2. `.env` dosyasını düzenleyin (`.env.example` referans):
    - `EXPO_PUBLIC_SUPABASE_URL`
    - `EXPO_PUBLIC_SUPABASE_ANON_KEY`
+   - `EXPO_PUBLIC_RAILWAY_API_URL` (KBS/OPS backend)
 
-3. Supabase’de migration’ı çalıştırın:
-   - Supabase Dashboard → SQL Editor → `supabase/migrations/001_initial_schema.sql` içeriğini yapıştırıp çalıştırın.
+3. Supabase migration’larını çalıştırın:
+   - Yerel Supabase CLI ile: `supabase db reset` (önerilir)
+   - Ya da Dashboard → SQL Editor üzerinden `supabase/migrations/*` dosyalarını sırayla çalıştırın.
 
 4. İlk personel kullanıcısı:
    - Supabase Auth ile bir kullanıcı oluşturun (e-posta/şifre).
@@ -31,6 +33,18 @@ Otel konaklama sözleşmesi ve check-in/out yönetim sistemi. Expo 54 + TypeScri
    ```bash
    npx expo start
    ```
+
+## KBS / OPS (Railway + Gateway)
+
+- `railway-service/`: OPS API (service-role ile Supabase ops.* yazar, mobile JWT ile erişir)
+- `kbs-gateway-service/`: dış KBS sağlayıcı entegrasyonu (signature verify + credential decrypt + provider abstraction)
+
+Supabase OPS migrations:
+- `137_ops_official_checkin_system.sql`: ops şeması + RLS + permissions seed
+- `138_ops_storage_passport_buckets.sql`: storage bucket/policy
+- `140_ops_jobs_queue.sql`: jobs queue + `ops.claim_next_job`
+- `141_ops_hardening.sql`: unique/index + RLS write kapama (authenticated)
+- `142_ops_demo_bootstrap.sql`: `ops.bootstrap_demo_hotel(...)` (service_role)
 
 ## Proje yapısı
 

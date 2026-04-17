@@ -1,13 +1,36 @@
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, FlatList, RefreshControl } from 'react-native';
 import { theme } from '@/constants/theme';
+import { useQuery } from '@tanstack/react-query';
+import { apiGet } from '@/lib/kbsApi';
 
 export default function RoomsLiveViewScreen() {
+  const q = useQuery({
+    queryKey: ['kbs', 'rooms_summary'],
+    queryFn: async () => {
+      const res = await apiGet<any[]>('/rooms/summary');
+      if (!res.ok) throw new Error(res.error.message);
+      return res.data;
+    }
+  });
+
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Canlı Oda Görünümü</Text>
-      <Text style={styles.p}>
-        TODO: Railway API + Supabase Realtime ile oda kartları (aktif kişi sayısı, ready/submitted/failed), hızlı aksiyonlar.
-      </Text>
+      <Text style={styles.p}>Oda bazlı aktif misafirler ve KBS durumları (polling).</Text>
+
+      <FlatList
+        data={q.data ?? []}
+        keyExtractor={(it) => it.roomId}
+        refreshControl={<RefreshControl refreshing={q.isFetching} onRefresh={() => q.refetch()} />}
+        renderItem={({ item }) => (
+          <View style={styles.card}>
+            <Text style={styles.roomTitle}>Oda {item.roomNumber}</Text>
+            <Text style={styles.meta}>Aktif: {(item.guests ?? []).length}</Text>
+            <Text style={styles.meta}>Ready: {item.counts?.ready_to_submit ?? 0} • Submitted: {item.counts?.submitted ?? 0} • Failed: {item.counts?.failed ?? 0}</Text>
+          </View>
+        )}
+        ListEmptyComponent={<Text style={styles.empty}>{q.isLoading ? 'Yükleniyor…' : 'Oda yok.'}</Text>}
+      />
     </View>
   );
 }
@@ -16,5 +39,9 @@ const styles = StyleSheet.create({
   container: { flex: 1, padding: 16, backgroundColor: theme.colors.backgroundSecondary, gap: 10 },
   title: { fontSize: 18, fontWeight: '800', color: theme.colors.text },
   p: { color: theme.colors.textSecondary, lineHeight: 20 },
+  empty: { color: theme.colors.textSecondary, marginTop: 12 },
+  card: { backgroundColor: theme.colors.surface, borderRadius: 14, borderWidth: 1, borderColor: theme.colors.borderLight, padding: 12, marginBottom: 10, gap: 4 },
+  roomTitle: { fontWeight: '900', color: theme.colors.text },
+  meta: { color: theme.colors.textSecondary },
 });
 

@@ -88,6 +88,7 @@ const SECTIONS: { title: string; subtitle?: string; items: SectionItem[] }[] = [
       { href: '/admin/cameras', icon: 'videocam-outline', label: 'Kamera yönetimi' },
       { href: '/admin/permissions', icon: 'shield-checkmark-outline', label: 'İzinler' },
       { href: '/admin/kbs-settings', icon: 'scan-outline', label: 'KBS Ayarları (Admin)' },
+      { href: '/admin/kbs-permissions', icon: 'shield-outline', label: 'KBS Yetkileri (OPS)' },
     ],
   },
   {

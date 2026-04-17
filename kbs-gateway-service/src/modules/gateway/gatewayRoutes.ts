@@ -11,7 +11,19 @@ const BaseSchema = z.object({
   hotelId: z.string().uuid(),
   guestDocumentId: z.string().uuid(),
   stayAssignmentId: z.string().uuid(),
-  transactionId: z.string().uuid()
+  transactionId: z.string().uuid(),
+
+  fullName: z.string().nullable().optional(),
+  firstName: z.string().nullable().optional(),
+  lastName: z.string().nullable().optional(),
+  documentNumber: z.string().nullable().optional(),
+  nationalityCode: z.string().nullable().optional(),
+  issuingCountryCode: z.string().nullable().optional(),
+  birthDate: z.string().nullable().optional(),
+  gender: z.enum(['M', 'F', 'X']).nullable().optional(),
+  roomNumber: z.string().nullable().optional(),
+  checkInAt: z.string().nullable().optional(),
+  checkOutAt: z.string().nullable().optional()
 });
 
 function createProvider(app: any): OfficialSubmissionProvider {

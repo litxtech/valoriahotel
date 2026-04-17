@@ -2,9 +2,37 @@ import 'react-native-url-polyfill/auto';
 import { createClient } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { log } from '@/lib/logger';
+import Constants from 'expo-constants';
 
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
-const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
+type PublicExtra = {
+  supabaseUrl?: string;
+  supabaseAnonKey?: string;
+  railwayApiUrl?: string;
+};
+
+function getPublicExtra(): PublicExtra {
+  // Expo runtime can expose config in different places depending on platform/build:
+  // - Constants.expoConfig (dev-client / many native runs)
+  // - Constants.manifest (older)
+  // - Constants.manifest2?.extra (newer updates)
+  const anyConstants = Constants as unknown as {
+    expoConfig?: { extra?: unknown };
+    manifest?: { extra?: unknown };
+    manifest2?: { extra?: unknown };
+  };
+  const extra =
+    ((anyConstants.expoConfig?.extra ?? anyConstants.manifest?.extra ?? anyConstants.manifest2?.extra ?? {}) as Record<string, unknown>);
+  const pub = (extra.public ?? {}) as Record<string, unknown>;
+  return {
+    supabaseUrl: typeof pub.supabaseUrl === 'string' ? pub.supabaseUrl : undefined,
+    supabaseAnonKey: typeof pub.supabaseAnonKey === 'string' ? pub.supabaseAnonKey : undefined,
+    railwayApiUrl: typeof pub.railwayApiUrl === 'string' ? pub.railwayApiUrl : undefined,
+  };
+}
+
+const publicExtra = getPublicExtra();
+const supabaseUrl = publicExtra.supabaseUrl ?? process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
+const supabaseAnonKey = publicExtra.supabaseAnonKey ?? process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
 
 log.info('Supabase init', {
   hasUrl: !!supabaseUrl,

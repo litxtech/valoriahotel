@@ -119,6 +119,11 @@ const baseConfig = {
     router: { origin: 'https://valoriahotel-el4r.vercel.app' },
     eas: { projectId: 'b6913ae8-bafd-4899-96bc-ae995a4bcec1' },
     devClientScheme,
+    public: {
+      supabaseUrl: process.env.EXPO_PUBLIC_SUPABASE_URL,
+      supabaseAnonKey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY,
+      railwayApiUrl: process.env.EXPO_PUBLIC_RAILWAY_API_URL,
+    },
   },
   owner: 'valoriahotel',
 };

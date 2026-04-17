@@ -11,6 +11,12 @@ node_modules/
 dist/
 web-build/
 
+# Firebase / Google services
+google-services.json
+
+# Supabase CLI temp files
+supabase/.temp/
+
 # Native
 *.orig.*
 *.jks

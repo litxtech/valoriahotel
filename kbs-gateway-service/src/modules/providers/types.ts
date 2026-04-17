@@ -11,7 +11,16 @@ export type SubmitCheckInPayload = {
   guestDocumentId: string;
   stayAssignmentId: string;
   transactionId: string;
-  // TODO(real provider mapping required): include normalized fields
+  fullName?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  documentNumber?: string | null;
+  nationalityCode?: string | null;
+  issuingCountryCode?: string | null;
+  birthDate?: string | null; // ISO yyyy-mm-dd preferred
+  gender?: 'M' | 'F' | 'X' | null;
+  roomNumber?: string | null;
+  checkInAt?: string | null; // ISO datetime preferred
 };
 
 export type SubmitCheckOutPayload = {
@@ -19,7 +28,9 @@ export type SubmitCheckOutPayload = {
   guestDocumentId: string;
   stayAssignmentId: string;
   transactionId: string;
-  // TODO(real provider mapping required)
+  documentNumber?: string | null;
+  roomNumber?: string | null;
+  checkOutAt?: string | null; // ISO datetime preferred
 };
 
 export type ProviderResponse = {

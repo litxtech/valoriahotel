@@ -8,6 +8,20 @@ const UpdateUserPermissionsSchema = z.object({
 });
 
 export const adminPermissionsRoutes: FastifyPluginAsync = async (app) => {
+  app.get('/admin/permission-catalog', async (req) => {
+    const auth = req.auth;
+    if (!auth) throw Errors.unauthorized();
+    if (auth.role !== 'admin') throw Errors.forbidden('Admin only');
+
+    const { data, error } = await app.supabase
+      .schema('ops')
+      .from('app_permissions')
+      .select('code, name, description')
+      .order('code', { ascending: true });
+    if (error) throw Errors.internal('Failed to load permission catalog');
+    return { ok: true, data: data ?? [] };
+  });
+
   app.get('/admin/users-with-permissions', async (req) => {
     const auth = req.auth;
     if (!auth) throw Errors.unauthorized();
