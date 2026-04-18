@@ -1,0 +1,14 @@
+# OPS API — Railway'de Root Directory = railway-service kullanıyorsan bu dosya geçerli olur.
+# (Monorepo kökünden deploy: repo kökündeki ../railway.toml kullanılır.)
+#
+# https://docs.railway.app/guides/config-as-code
+
+[build]
+builder = "nixpacks"
+buildCommand = "npm ci && npm run build"
+
+[deploy]
+startCommand = "npm run start:ops-api"
+healthcheckPath = "/health"
+healthcheckTimeout = 100
+restartPolicyType = "ON_FAILURE"

@@ -1,0 +1,5 @@
+# Nixpacks Node sürümü (.nvmrc bazen yeterli olmuyor; build logunda nodejs_20 görünmeli)
+# https://nixpacks.com/docs/providers/node
+
+[variables]
+NIXPACKS_NODE_VERSION = "20"

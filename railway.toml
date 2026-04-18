@@ -1,4 +1,6 @@
-# Valoria OPS API (railway-service) — tek süreç olarak dinler (spawn / npm start zinciri yok).
+# Valoria OPS API — monorepo kökünden deploy edildiğinde bu dosya kullanılır.
+# Railway'de "Root Directory" = railway-service ise: railway-service/railway.toml kullan
+# (veya servis ayarında config path olarak işaretle).
 # https://docs.railway.app/guides/config-as-code
 
 [build]
