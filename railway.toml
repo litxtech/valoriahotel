@@ -8,7 +8,8 @@ builder = "nixpacks"
 buildCommand = "npm run build"
 
 [deploy]
-startCommand = "npm run start:ops-api"
+# npm run yok: ek süreç + stderr uyarıları; doğrudan Node (PORT Railway’den gelir)
+startCommand = "node railway-service/dist/app/server.js"
 healthcheckPath = "/health"
 healthcheckTimeout = 100
 restartPolicyType = "ON_FAILURE"
