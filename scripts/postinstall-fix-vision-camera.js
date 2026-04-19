@@ -372,12 +372,17 @@ function main() {
       edits: [
         {
           from:
+            "      } else if #available(iOS 17.0, *), type == .humanFullBody {\n" +
+            "        self = .humanFullBody\n" +
             "      } else if #available(iOS 26.0, *), type == .dogHead {\n" +
             "        self = .dogHead\n" +
             "      } else if #available(iOS 26.0, *), type == .catHead {\n" +
             "        self = .catHead\n" +
             "      } else {\n",
-          to: "      } else {\n",
+          to:
+            "      } else if #available(iOS 17.0, *), type == .humanFullBody {\n" +
+            "        self = .humanFullBody\n" +
+            "      } else {\n",
         },
         {
           from:
