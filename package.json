@@ -3,7 +3,7 @@
   "version": "2.2.5",
   "main": "index.js",
   "scripts": {
-    "start": "node scripts/start-railway-or-dev.js",
+    "start": "node scripts/start-local-or-gateway.js",
     "start:ops-api": "node railway-service/dist/app/server.js",
     "start:dev": "expo start --dev-client --scheme exp+valoria-hotel",
     "start:dev:lan": "node scripts/dev-host.js",
@@ -26,7 +26,7 @@
     "submit:dev:ios": "eas submit --profile development --platform ios --latest",
     "submit:dev:android": "eas submit --profile development --platform android --latest",
     "submit:dev": "eas submit --profile development --platform all --latest",
-    "postinstall": "patch-package"
+    "postinstall": "node scripts/postinstall-fix-vision-camera.js && patch-package"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
@@ -46,6 +46,7 @@
     "expo-clipboard": "~8.0.8",
     "expo-constants": "~18.0.13",
     "expo-dev-client": "~6.0.20",
+    "expo-document-picker": "~14.0.8",
     "expo-file-system": "~19.0.0",
     "expo-font": "~14.0.11",
     "expo-image": "~3.0.11",
@@ -71,16 +72,22 @@
     "react-i18next": "^15.0.0",
     "react-native": "0.81.5",
     "react-native-maps": "1.20.1",
+    "react-native-nitro-image": "^0.13.1",
+    "react-native-nitro-modules": "^0.35.4",
     "react-native-qrcode-svg": "^6.3.0",
+    "react-native-reanimated": "~4.1.1",
     "react-native-safe-area-context": "~5.6.0",
     "react-native-screens": "~4.16.0",
     "react-native-signature-canvas": "^4.6.3",
     "react-native-svg": "15.12.1",
     "react-native-url-polyfill": "^2.0.0",
     "react-native-view-shot": "4.0.3",
+    "react-native-vision-camera": "^5.0.1",
+    "react-native-vision-camera-mlkit": "^1.0.0",
     "react-native-vlc-media-player": "^1.0.98",
     "react-native-web": "^0.21.0",
     "react-native-webview": "13.15.0",
+    "react-native-worklets": "0.5.1",
     "zustand": "^5.0.0"
   },
   "devDependencies": {
@@ -95,7 +102,13 @@
     "doctor": {
       "reactNativeDirectoryCheck": {
         "exclude": [
-          "expo-text-extractor"
+          "expo-text-extractor",
+          "react-native-vision-camera-mlkit",
+          "react-native-vision-camera",
+          "react-native-nitro-modules",
+          "react-native-nitro-image",
+          "react-native-vlc-media-player",
+          "react-native-vector-icons"
         ]
       }
     }
