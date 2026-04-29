@@ -27,7 +27,7 @@
     .title{font-size:24px;font-weight:900;letter-spacing:.2px}
     .subtitle{margin-top:6px;color:rgba(255,255,255,.86);font-size:13px}
     .badge{padding:8px 10px;border-radius:999px;background:rgba(255,255,255,.12);font-size:12px;font-weight:700}
-    .grid{display:grid;grid-template-columns:2fr 1fr;gap:12px}
+    .grid{display:grid;grid-template-columns:1fr;gap:12px}
     .card{background:var(--card);color:var(--text);border-radius:14px;padding:14px;border:1px solid var(--line)}
     .panelTitle{font-size:14px;font-weight:900;color:#0f172a;margin:0 0 10px}
     .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
@@ -51,7 +51,8 @@
     .docTitle{font-weight:800;margin-bottom:3px}
     .docActions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
     .docActions button{padding:8px 10px;font-size:12px}
-    #forms{display:none}
+    #contentArea{display:none}
+    #forms{display:block}
     .empty{padding:18px;text-align:center;color:var(--muted)}
     @media (max-width: 900px){
       .grid{grid-template-columns:1fr}
@@ -75,34 +76,26 @@
 
     <div class="grid">
       <div class="card">
-        <h3 class="panelTitle">Erisim ve Evraklar</h3>
+        <h3 class="panelTitle">PIN Dogrulama</h3>
         <div class="row" style="margin-bottom:8px">
           <input id="pin" type="password" placeholder="PIN girin" />
           <button onclick="unlock()">Portali Ac</button>
           <span id="authState" class="status">Kilitli</span>
-          <button class="secondary" onclick="refreshDocuments()">Listeyi Yenile</button>
+          <button class="secondary" onclick="refreshAll()">Listeyi Yenile</button>
         </div>
-        <div class="muted">Portal acildiktan sonra evraklar 30 saniyede bir otomatik guncellenir.</div>
+        <div class="muted">PIN dogrulandiktan sonra evraklar ve gunluk musteri formlari otomatik yuklenir, 30 saniyede bir yenilenir.</div>
         <div class="stats">
           <div class="stat"><b id="statSections">0</b><span>Cekmece</span></div>
           <div class="stat"><b id="statDocs">0</b><span>Toplam Evrak</span></div>
           <div class="stat"><b id="statRefresh">Kapali</b><span>Canli Yenileme</span></div>
         </div>
       </div>
-      <div class="card">
-        <h3 class="panelTitle">Gunluk Musteri Formlari</h3>
-        <div class="row">
-          <input id="dayFilter" type="date" />
-          <input id="monthFilter" type="month" />
-          <button class="secondary" onclick="loadForms()">Gunluk Formlari Cek</button>
-          <button class="secondary" onclick="loadLatest()">Son Form</button>
-        </div>
-        <div class="muted" style="margin-top:8px">Gun veya ay bazinda form listesi alinabilir. Son form hizli kontrol icindir.</div>
-      </div>
     </div>
 
-    <div id="docs" class="card" style="margin-top:12px"><div class="empty">Portal kilitli. PIN ile aciniz.</div></div>
-    <div id="forms" class="card"></div>
+    <div id="contentArea">
+      <div id="docs" class="card" style="margin-top:12px"></div>
+      <div id="forms" class="card" style="margin-top:12px"></div>
+    </div>
   </div>
 
   <script>
@@ -175,48 +168,48 @@
         }catch(e){ alert((e && e.message) || 'Gonderilemedi'); }
       };
 
-      async function refreshDocuments(){
-        var docs = await api({ view:'documents' });
-        renderDocs(docs);
+      function renderForms(items){
+        var box = document.getElementById('forms');
+        var list = items || [];
+        var rows = list.map(function(f, i){
+          return '<div class="doc">' +
+            '<div>' +
+              '<div class="docTitle">' + (i + 1) + '. ' + (f.full_name || 'Isimsiz') + '</div>' +
+              '<div class="muted">Kayit: ' + (f.created_at || '-') + '</div>' +
+              '<div class="muted">Oda: ' + (f.room_id || '-') + ' · Telefon: ' + (f.phone || '-') + '</div>' +
+              '<div class="muted">Kimlik: ' + (f.id_number || '-') + '</div>' +
+            '</div>' +
+          '</div>';
+        }).join('');
+        box.innerHTML = '<h3 class="panelTitle">Musteri Gunluk Formlari (Sirali)</h3>' +
+          (rows || '<div class="empty">Gosterilecek musteri formu bulunamadi.</div>');
       }
-      window.refreshDocuments = refreshDocuments;
+
+      async function refreshAll(){
+        if (!pin) return;
+        var responses = await Promise.all([
+          api({ view:'documents' }),
+          api({ view:'daily-forms' })
+        ]);
+        renderDocs(responses[0]);
+        renderForms(responses[1].items || []);
+      }
+      window.refreshAll = refreshAll;
 
       window.unlock = async function(){
         pin = (document.getElementById('pin').value || '').trim();
         if (!pin) return alert('PIN gerekli');
         try{
-          await refreshDocuments();
+          await refreshAll();
+          document.getElementById('contentArea').style.display = 'block';
           document.getElementById('authState').textContent = 'Acik';
           if (autoRefreshTimer) clearInterval(autoRefreshTimer);
-          autoRefreshTimer = setInterval(function(){ refreshDocuments().catch(function(){}); }, 30000);
+          autoRefreshTimer = setInterval(function(){ refreshAll().catch(function(){}); }, 30000);
           document.getElementById('statRefresh').textContent = 'Acik';
         }catch(e){
           document.getElementById('authState').textContent = 'Hatali PIN';
           alert((e && e.message) || 'Erisim reddedildi');
         }
-      };
-
-      window.loadForms = async function(){
-        if (!pin) return alert('Once PIN ile portali acin.');
-        var day = document.getElementById('dayFilter').value;
-        var month = document.getElementById('monthFilter').value;
-        var res = await api({ view:'daily-forms', date:day || '', month:month || '' });
-        var box = document.getElementById('forms');
-        box.style.display = 'block';
-        box.innerHTML = "<h3 style='margin:0 0 8px'>Gunluk Musteri Formlari</h3>" + (res.items || []).map(function(f){
-          return '<div class="doc"><div class="docTitle">' + (f.full_name || 'Isimsiz') + '</div><div class="muted">' +
-            (f.created_at || '-') + ' · Oda: ' + (f.room_id || '-') + '</div></div>';
-        }).join('');
-      };
-
-      window.loadLatest = async function(){
-        if (!pin) return alert('Once PIN ile portali acin.');
-        var res = await api({ view:'latest-form' });
-        var f = res.item;
-        var box = document.getElementById('forms');
-        box.style.display = 'block';
-        box.innerHTML = "<h3 style='margin:0 0 8px'>Son Musteri Formu</h3>" +
-          (f ? '<div class="doc"><div class="docTitle">' + (f.full_name || 'Isimsiz') + '</div><div class="muted">' + (f.created_at || '-') + '</div></div>' : '<p>Kayıt yok.</p>');
       };
     })();
   </script>
