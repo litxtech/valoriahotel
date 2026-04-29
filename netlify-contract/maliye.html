@@ -85,7 +85,7 @@
     </div>
 
     <div class="grid">
-      <div class="card">
+      <div class="card" id="pinCard">
         <h3 class="panelTitle">PIN Dogrulama</h3>
         <div class="row" style="margin-bottom:8px">
           <input id="pin" type="password" placeholder="PIN kodunu girin" />
@@ -243,6 +243,8 @@
         msg.textContent = 'PIN dogrulaniyor...';
         try{
           await refreshAll(true);
+          var pinCard = document.getElementById('pinCard');
+          if (pinCard) pinCard.style.display = 'none';
           document.getElementById('contentArea').style.display = 'block';
           var authState = document.getElementById('authState');
           authState.textContent = 'Acik';
@@ -255,6 +257,8 @@
           var authStateError = document.getElementById('authState');
           authStateError.textContent = 'Hatali PIN';
           authStateError.classList.remove('open');
+          var pinCardError = document.getElementById('pinCard');
+          if (pinCardError) pinCardError.style.display = 'block';
           msg.className = 'info show err';
           msg.textContent = (e && e.message) || 'Erisim reddedildi';
           alert((e && e.message) || 'PIN hatali veya baglanti sorunu var.');
