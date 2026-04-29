@@ -26,8 +26,10 @@ async function notifyAdminsForMaliyePinSuccess(
   }
 ) {
   try {
+    const timeout = AbortSignal.timeout(5000);
     await fetch(`${supabaseUrl}/functions/v1/notify-admins`, {
       method: "POST",
+      signal: timeout,
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${serviceKey}`,
@@ -60,13 +62,19 @@ type AccessTokenRow = {
   is_active: boolean;
 };
 
-function hashPin(pin: string, salt: string) {
-  const data = new TextEncoder().encode(`${pin}:${salt}`);
-  return crypto.subtle.digest("SHA-256", data).then((ab) =>
-    Array.from(new Uint8Array(ab))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("")
-  );
+async function hashPin(
+  supabase: ReturnType<typeof createClient>,
+  pin: string,
+  salt: string
+): Promise<string> {
+  const { data, error } = await supabase.rpc("maliye_hash_pin", {
+    pin_input: pin,
+    salt_input: salt,
+  });
+  if (error || typeof data !== "string" || !data.trim()) {
+    throw new Error("PIN hash hesaplanamadi");
+  }
+  return data;
 }
 
 async function validateAccess(
@@ -87,7 +95,7 @@ async function validateAccess(
 
   if (!row) return { ok: false, reason: "Token geçersiz veya süresi dolmuş." };
   const tokenRow = row as AccessTokenRow;
-  const incomingHash = await hashPin(pin, tokenRow.pin_salt);
+  const incomingHash = await hashPin(supabase, pin, tokenRow.pin_salt);
   if (incomingHash !== tokenRow.pin_hash) return { ok: false, reason: "PIN hatalı.", row: tokenRow };
   return { ok: true, row: tokenRow };
 }
