@@ -430,6 +430,34 @@ Deno.serve(async (req: Request) => {
   const notify = (url.searchParams.get("notify") ?? "").trim() === "1";
 
   if (view === "documents") {
+    if ((url.searchParams.get("mode") ?? "").trim() === "version") {
+      const { data: latestDocument } = await supabase
+        .from("documents")
+        .select("updated_at")
+        .eq("organization_id", orgId)
+        .eq("is_maliye_visible", true)
+        .is("archived_at", null)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      const { data: latestGuest } = await supabase
+        .from("guests")
+        .select("created_at")
+        .eq("organization_id", orgId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      const docsUpdatedAt = latestDocument?.updated_at ?? null;
+      const formsUpdatedAt = latestGuest?.created_at ?? null;
+      const version = `${docsUpdatedAt ?? "none"}|${formsUpdatedAt ?? "none"}`;
+      return new Response(JSON.stringify({ version, docsUpdatedAt, formsUpdatedAt }), {
+        status: 200,
+        headers: JSON_HEADERS,
+      });
+    }
+
     const { data: sections } = await supabase
       .from("maliye_document_sections")
       .select("id, name, display_order")

@@ -111,6 +111,7 @@
       var token = params.get('token') || params.get('t') || 'valoria-maliye-qr';
       var pin = '';
       var autoRefreshTimer = null;
+      var lastVersion = null;
 
       function qs(obj){ return '?' + new URLSearchParams(obj).toString(); }
 
@@ -209,8 +210,28 @@
         ]);
         renderDocs(responses[0]);
         renderForms(responses[1].items || []);
+        try {
+          var versionRes = await api({ view:'documents', mode:'version' });
+          lastVersion = versionRes && versionRes.version ? versionRes.version : null;
+        } catch (_) {}
       }
       window.refreshAll = refreshAll;
+
+      async function refreshIfChanged(){
+        if (!pin) return;
+        try {
+          var versionRes = await api({ view:'documents', mode:'version' });
+          var currentVersion = versionRes && versionRes.version ? versionRes.version : null;
+          if (!currentVersion) return;
+          if (!lastVersion) {
+            lastVersion = currentVersion;
+            return;
+          }
+          if (currentVersion !== lastVersion) {
+            await refreshAll(false);
+          }
+        } catch (_) {}
+      }
 
       window.unlock = async function(){
         pin = (document.getElementById('pin').value || '').trim();
@@ -229,7 +250,7 @@
           msg.className = 'info show ok';
           msg.textContent = 'Giris basarili. Evraklar yuklendi.';
           if (autoRefreshTimer) clearInterval(autoRefreshTimer);
-          autoRefreshTimer = setInterval(function(){ refreshAll(false).catch(function(){}); }, 30000);
+          autoRefreshTimer = setInterval(function(){ refreshIfChanged().catch(function(){}); }, 12000);
         }catch(e){
           var authStateError = document.getElementById('authState');
           authStateError.textContent = 'Hatali PIN';
