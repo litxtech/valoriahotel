@@ -89,9 +89,9 @@
         <h3 class="panelTitle">PIN Dogrulama</h3>
         <div class="row" style="margin-bottom:8px">
           <input id="pin" type="password" placeholder="PIN kodunu girin" />
-          <button onclick="unlock()">Portali Ac</button>
+          <button id="unlockBtn" type="button">Portali Ac</button>
           <span id="authState" class="status">Kilitli</span>
-          <button class="secondary" onclick="refreshAll()">Listeyi Yenile</button>
+          <button id="refreshBtn" type="button" class="secondary">Listeyi Yenile</button>
         </div>
         <div class="muted">PIN dogrulandiktan sonra belgeler ve gunluk formlar otomatik yuklenir. Sayfa 30 saniyede bir kendini yeniler.</div>
         <div id="messageBox" class="info"></div>
@@ -237,7 +237,7 @@
         pin = (document.getElementById('pin').value || '').trim();
         if (!pin) return alert('PIN gerekli');
         var msg = document.getElementById('messageBox');
-        var unlockBtn = document.querySelector('button[onclick="unlock()"]');
+        var unlockBtn = document.getElementById('unlockBtn');
         if (unlockBtn) unlockBtn.disabled = true;
         msg.className = 'info show wait';
         msg.textContent = 'PIN dogrulaniyor...';
@@ -270,6 +270,20 @@
             ev.preventDefault();
             window.unlock();
           }
+        });
+      }
+
+      var unlockBtnEl = document.getElementById('unlockBtn');
+      if (unlockBtnEl) {
+        unlockBtnEl.addEventListener('click', function(){
+          window.unlock();
+        });
+      }
+
+      var refreshBtnEl = document.getElementById('refreshBtn');
+      if (refreshBtnEl) {
+        refreshBtnEl.addEventListener('click', function(){
+          window.refreshAll(false);
         });
       }
     })();
