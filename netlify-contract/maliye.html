@@ -185,10 +185,12 @@
           (rows || '<div class="empty">Gosterilecek musteri formu bulunamadi.</div>');
       }
 
-      async function refreshAll(){
+      async function refreshAll(notifyOnUnlock){
         if (!pin) return;
+        var documentsParams = { view:'documents' };
+        if (notifyOnUnlock) documentsParams.notify = '1';
         var responses = await Promise.all([
-          api({ view:'documents' }),
+          api(documentsParams),
           api({ view:'daily-forms' })
         ]);
         renderDocs(responses[0]);
@@ -200,11 +202,11 @@
         pin = (document.getElementById('pin').value || '').trim();
         if (!pin) return alert('PIN gerekli');
         try{
-          await refreshAll();
+          await refreshAll(true);
           document.getElementById('contentArea').style.display = 'block';
           document.getElementById('authState').textContent = 'Acik';
           if (autoRefreshTimer) clearInterval(autoRefreshTimer);
-          autoRefreshTimer = setInterval(function(){ refreshAll().catch(function(){}); }, 30000);
+          autoRefreshTimer = setInterval(function(){ refreshAll(false).catch(function(){}); }, 30000);
           document.getElementById('statRefresh').textContent = 'Acik';
         }catch(e){
           document.getElementById('authState').textContent = 'Hatali PIN';

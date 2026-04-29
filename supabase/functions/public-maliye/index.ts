@@ -16,6 +16,41 @@ const HTML_HEADERS = {
 const JSON_HEADERS = { ...CORS, "Content-Type": "application/json; charset=utf-8" };
 const DEFAULT_MALIYE_TOKEN = "valoria-maliye-qr";
 
+async function notifyAdminsForMaliyePinSuccess(
+  supabaseUrl: string,
+  serviceKey: string,
+  payload: {
+    token: string;
+    organizationId: string;
+    ipAddress: string | null;
+  }
+) {
+  try {
+    await fetch(`${supabaseUrl}/functions/v1/notify-admins`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${serviceKey}`,
+        apikey: serviceKey,
+      },
+      body: JSON.stringify({
+        title: "Maliye QR girisi",
+        body: "Maliye portali PIN ile acildi.",
+        data: {
+          screen: "admin/maliye/logs",
+          type: "maliye_pin_success",
+          maliyeToken: payload.token,
+          organizationId: payload.organizationId,
+          ipAddress: payload.ipAddress,
+          timestamp: new Date().toISOString(),
+        },
+      }),
+    });
+  } catch (_) {
+    // Bildirim hatasi portali bozmasin.
+  }
+}
+
 type AccessTokenRow = {
   id: string;
   organization_id: string;
@@ -384,6 +419,7 @@ Deno.serve(async (req: Request) => {
 
   const orgId = auth.row.organization_id;
   const view = (url.searchParams.get("view") ?? "documents").trim();
+  const notify = (url.searchParams.get("notify") ?? "").trim() === "1";
 
   if (view === "documents") {
     const { data: sections } = await supabase
@@ -444,6 +480,13 @@ Deno.serve(async (req: Request) => {
       ip_address: ip,
       user_agent: ua,
     });
+    if (notify) {
+      await notifyAdminsForMaliyePinSuccess(supabaseUrl, serviceKey, {
+        token,
+        organizationId: orgId,
+        ipAddress: ip,
+      });
+    }
     return new Response(JSON.stringify({ sections: Array.from(sectionMap.values()) }), { status: 200, headers: JSON_HEADERS });
   }
 
