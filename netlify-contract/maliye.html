@@ -29,7 +29,15 @@
     .subtitle{margin-top:6px;color:rgba(255,255,255,.9);font-size:13px}
     .badge{padding:8px 12px;border-radius:999px;background:rgba(255,255,255,.16);font-size:12px;font-weight:700}
     .grid{display:grid;grid-template-columns:1fr;gap:12px}
-    .card{background:var(--card);color:var(--text);border-radius:16px;padding:16px;border:1px solid var(--line);box-shadow:0 10px 32px rgba(2,8,23,.12)}
+    .card{
+      background:linear-gradient(140deg,rgba(255,255,255,.95),rgba(255,255,255,.9));
+      color:var(--text);
+      border-radius:16px;
+      padding:16px;
+      border:1px solid rgba(255,255,255,.45);
+      box-shadow:0 12px 36px rgba(2,8,23,.18);
+      backdrop-filter: blur(8px);
+    }
     .panelTitle{font-size:15px;font-weight:900;color:#0f172a;margin:0 0 12px}
     .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
     input,button{padding:11px 12px;border-radius:12px;border:1px solid #cbd5e1}
@@ -114,8 +122,20 @@
       window.toggleBody = toggleBody;
 
       async function api(paramsObj){
-        var r = await fetch(API + qs(Object.assign({ format:'json', token:token, pin:pin }, paramsObj)));
-        var j = await r.json();
+        var controller = new AbortController();
+        var timer = setTimeout(function(){ controller.abort(); }, 12000);
+        var r;
+        try {
+          r = await fetch(API + qs(Object.assign({ format:'json', token:token, pin:pin }, paramsObj)), { signal: controller.signal });
+        } finally {
+          clearTimeout(timer);
+        }
+        var j;
+        try {
+          j = await r.json();
+        } catch (_) {
+          throw new Error('Sunucudan gecersiz yanit alindi');
+        }
         if (!r.ok) throw new Error(j.error || 'Istek basarisiz');
         return j;
       }
@@ -196,6 +216,8 @@
         pin = (document.getElementById('pin').value || '').trim();
         if (!pin) return alert('PIN gerekli');
         var msg = document.getElementById('messageBox');
+        var unlockBtn = document.querySelector('button[onclick="unlock()"]');
+        if (unlockBtn) unlockBtn.disabled = true;
         msg.className = 'info show wait';
         msg.textContent = 'PIN dogrulaniyor...';
         try{
@@ -214,6 +236,9 @@
           authStateError.classList.remove('open');
           msg.className = 'info show err';
           msg.textContent = (e && e.message) || 'Erisim reddedildi';
+          alert((e && e.message) || 'PIN hatali veya baglanti sorunu var.');
+        } finally {
+          if (unlockBtn) unlockBtn.disabled = false;
         }
       };
 
