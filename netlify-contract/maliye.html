@@ -6,8 +6,9 @@
   <title>Valoria Hotel - Maliye Evrak Merkezi</title>
   <style>
     :root{
-      --bg:#0b1220;--bg2:#101c34;--card:#ffffff;--text:#111827;--muted:#64748b;
-      --line:#e2e8f0;--primary:#1d4ed8;--secondary:#0f766e;--soft:#f8fafc;
+      --bg:#090f1f;--bg2:#13213d;--card:#ffffff;--text:#0f172a;--muted:#475569;
+      --line:#dbe4f0;--primary:#1d4ed8;--secondary:#0f766e;--soft:#f8fafc;
+      --ok:#166534;--okBg:#dcfce7;
     }
     *{box-sizing:border-box}
     body{
@@ -19,28 +20,25 @@
     }
     .wrap{max-width:1180px;margin:0 auto;padding:18px 16px 26px}
     .hero{
-      background:linear-gradient(135deg,rgba(255,255,255,.12),rgba(255,255,255,.04));
-      border:1px solid rgba(255,255,255,.14);border-radius:16px;padding:16px 18px;margin-bottom:12px;
-      backdrop-filter: blur(6px);
+      background:linear-gradient(120deg,rgba(255,255,255,.14),rgba(255,255,255,.05));
+      border:1px solid rgba(255,255,255,.18);border-radius:18px;padding:18px 20px;margin-bottom:14px;
+      backdrop-filter: blur(8px);
     }
     .heroTop{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}
-    .title{font-size:24px;font-weight:900;letter-spacing:.2px}
-    .subtitle{margin-top:6px;color:rgba(255,255,255,.86);font-size:13px}
-    .badge{padding:8px 10px;border-radius:999px;background:rgba(255,255,255,.12);font-size:12px;font-weight:700}
+    .title{font-size:25px;font-weight:900;letter-spacing:.2px}
+    .subtitle{margin-top:6px;color:rgba(255,255,255,.9);font-size:13px}
+    .badge{padding:8px 12px;border-radius:999px;background:rgba(255,255,255,.16);font-size:12px;font-weight:700}
     .grid{display:grid;grid-template-columns:1fr;gap:12px}
-    .card{background:var(--card);color:var(--text);border-radius:14px;padding:14px;border:1px solid var(--line)}
-    .panelTitle{font-size:14px;font-weight:900;color:#0f172a;margin:0 0 10px}
+    .card{background:var(--card);color:var(--text);border-radius:16px;padding:16px;border:1px solid var(--line);box-shadow:0 10px 32px rgba(2,8,23,.12)}
+    .panelTitle{font-size:15px;font-weight:900;color:#0f172a;margin:0 0 12px}
     .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-    input,button{padding:10px;border-radius:10px;border:1px solid #cbd5e1}
-    input{background:#fff}
+    input,button{padding:11px 12px;border-radius:12px;border:1px solid #cbd5e1}
+    input{background:#fff;min-width:220px}
     button{cursor:pointer;background:var(--primary);color:#fff;border:none;font-weight:800}
     button.secondary{background:var(--secondary)}
-    .status{padding:8px 10px;border-radius:999px;font-size:12px;background:#e2e8f0;color:#1f2937;font-weight:700}
+    .status{padding:8px 12px;border-radius:999px;font-size:12px;background:#e2e8f0;color:#1f2937;font-weight:700}
+    .status.open{background:var(--okBg);color:var(--ok)}
     .muted{color:var(--muted);font-size:12px}
-    .stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px}
-    .stat{background:var(--soft);border:1px solid var(--line);border-radius:10px;padding:10px}
-    .stat b{display:block;font-size:18px;color:#0f172a}
-    .stat span{font-size:12px;color:#64748b}
     .accordion{border:1px solid var(--line);border-radius:12px;margin-bottom:10px;overflow:hidden;background:#fff}
     .accHead{padding:12px;background:var(--soft);font-weight:900;display:flex;justify-content:space-between;cursor:pointer}
     .accBody{padding:10px;display:none}
@@ -58,7 +56,6 @@
       .grid{grid-template-columns:1fr}
       .doc{grid-template-columns:1fr}
       .docActions{justify-content:flex-start}
-      .stats{grid-template-columns:1fr 1fr}
     }
   </style>
 </head>
@@ -68,9 +65,9 @@
       <div class="heroTop">
         <div>
           <div class="title">Maliye Evrak Merkezi</div>
-          <div class="subtitle">Sayin denetim gorevlisi, gerekli belgeler bu portalda cekmeceli yapida sunulmaktadir.</div>
+          <div class="subtitle">Denetim icin gerekli belgeler ve gunluk musteri formlari bu ekranda sunulur.</div>
         </div>
-        <div class="badge">Valoria Hotel · Resmi Dokuman Portalı</div>
+        <div class="badge">Valoria Hotel · Resmi Dokuman Portali</div>
       </div>
     </div>
 
@@ -78,17 +75,12 @@
       <div class="card">
         <h3 class="panelTitle">PIN Dogrulama</h3>
         <div class="row" style="margin-bottom:8px">
-          <input id="pin" type="password" placeholder="PIN girin" />
+          <input id="pin" type="password" placeholder="PIN kodunu girin" />
           <button onclick="unlock()">Portali Ac</button>
           <span id="authState" class="status">Kilitli</span>
           <button class="secondary" onclick="refreshAll()">Listeyi Yenile</button>
         </div>
-        <div class="muted">PIN dogrulandiktan sonra evraklar ve gunluk musteri formlari otomatik yuklenir, 30 saniyede bir yenilenir.</div>
-        <div class="stats">
-          <div class="stat"><b id="statSections">0</b><span>Cekmece</span></div>
-          <div class="stat"><b id="statDocs">0</b><span>Toplam Evrak</span></div>
-          <div class="stat"><b id="statRefresh">Kapali</b><span>Canli Yenileme</span></div>
-        </div>
+        <div class="muted">PIN dogrulandiktan sonra belgeler ve gunluk formlar otomatik yuklenir. Sayfa 30 saniyede bir kendini yeniler.</div>
       </div>
     </div>
 
@@ -124,11 +116,9 @@
 
       function renderDocs(data){
         var root = document.getElementById('docs');
-        root.innerHTML = '';
-        var totalDocs = 0;
+        root.innerHTML = '<h3 class="panelTitle">Maliye Evraklari</h3>';
         (data.sections || []).forEach(function(s, idx){
           var accId = 'acc_' + idx;
-          totalDocs += (s.documents || []).length;
           var docsHtml = (s.documents || []).map(function(d){
             var signed = d.signedUrl || '';
             return '<div class="doc">' +
@@ -146,9 +136,7 @@
             '<div class="accBody" id="' + accId + '">' + docsHtml + '</div></div>';
           root.insertAdjacentHTML('beforeend', html);
         });
-        if (!(data.sections || []).length) root.innerHTML = '<div class="empty">Gosterilecek evrak bulunamadi.</div>';
-        document.getElementById('statSections').textContent = String((data.sections || []).length);
-        document.getElementById('statDocs').textContent = String(totalDocs);
+        if (!(data.sections || []).length) root.innerHTML = '<h3 class="panelTitle">Maliye Evraklari</h3><div class="empty">Gosterilecek evrak bulunamadi.</div>';
       }
 
       window.downloadDoc = function(url){
@@ -204,12 +192,15 @@
         try{
           await refreshAll(true);
           document.getElementById('contentArea').style.display = 'block';
-          document.getElementById('authState').textContent = 'Acik';
+          var authState = document.getElementById('authState');
+          authState.textContent = 'Acik';
+          authState.classList.add('open');
           if (autoRefreshTimer) clearInterval(autoRefreshTimer);
           autoRefreshTimer = setInterval(function(){ refreshAll(false).catch(function(){}); }, 30000);
-          document.getElementById('statRefresh').textContent = 'Acik';
         }catch(e){
-          document.getElementById('authState').textContent = 'Hatali PIN';
+          var authStateError = document.getElementById('authState');
+          authStateError.textContent = 'Hatali PIN';
+          authStateError.classList.remove('open');
           alert((e && e.message) || 'Erisim reddedildi');
         }
       };
